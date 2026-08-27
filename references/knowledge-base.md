@@ -15,6 +15,29 @@ away.
 
 ---
 
+## 2026-08-27 — YPP monetization bar doubling (Feb 2027) + Shorts-to-subscriber conversion data
+
+**Query:** YouTube algorithm/monetization changes 2026, and why Shorts views don't convert to subscribers (relevant to this channel's course-sale-Shorts-vs-branded-niche tension in channel-snapshot.md §Key finding)
+
+**Sources:**
+- [YouTube Monetization Requirements Are Changing in 2027 (vidIQ)](https://vidiq.com/blog/post/youtube-partner-program-changes-2027/)
+- [YouTube now requires creators to have twice as many watch hours to start earning money (TechCrunch)](https://techcrunch.com/2026/08/10/youtube-now-requires-creators-to-have-twice-as-many-watch-hours-to-start-earning-money/)
+- [YouTube Doubles The Monetization Bar For New Creators (Forbes)](https://www.forbes.com/sites/gabrielalinzainescu/2026/08/11/youtube-doubles-the-monetization-bar-for-new-creators/)
+- [New YouTube creators will need 8000 watch hours to start earning from ads — double the current bar (Music Business Worldwide)](https://www.musicbusinessworldwide.com/new-youtube-creators-will-need-8000-watch-hours-to-start-earning-from-ads-double-the-current-bar/)
+- [YouTube updates channel monetisation rules after 8 years: What's changing (Business Standard)](https://www.business-standard.com/technology/tech-news/technology-tech-news-youtube-partner-program-monetisation-rules-2027-watch-hours-shorts-views-126081100708_1.html)
+- [YouTube's 8000-hour rule also has a catch for existing channels (NotebookCheck)](https://www.notebookcheck.net/YouTube-s-8-000-hour-rule-also-has-a-catch-for-existing-channels.1366446.0.html)
+- (Shorts-conversion data point, lower confidence / aggregator source, cross-check before relying on the exact ratio) [YouTube Shorts vs Long-Form: Which Grows Faster to 1K?](https://touhfa.art/blog/growth/youtube-shorts-vs-long-form-subscribers/)
+
+**Findings:**
+- YouTube announced Aug 10, 2026 that it is **doubling YPP entry requirements effective February 1, 2027**: 1,000 subscribers **and** either **8,000 qualified public watch hours in 365 days** (up from 4,000) **or 20 million qualified Shorts views in 90 days** (up from 10 million).
+- **Grandfather clause**: creators *already enrolled in YPP and earning* by that date keep the old thresholds — but must accept updated monetization terms in Studio by Jan 31, 2027, or earnings pause Feb 1. Creators who have **not yet been accepted into YPP** by Feb 1, 2027 must clear the new, doubled bar — there is no partial credit for hours/subs already accumulated toward the old 4,000/10M targets.
+- Separately, drawing from the Shorts Creator Pool from Feb 1, 2027 needs 10M qualified Shorts views in a 90-day window regardless of the entry path.
+- Lower-confidence secondary finding (single aggregator source, not independently verified today): Shorts-to-subscriber conversion is very weak on its own — cited range of roughly 0.05–0.5% of Shorts viewers subscribing, vs. long-form converting at several times that rate, because Shorts audiences are largely passive swipe-through discovery traffic with no prior relationship to the channel. Treat this specific ratio as directional, not a hard fact, until corroborated by a second source.
+
+**Applied how:** This is a hard deadline change for DescubrimientosFascinantes, not a minor algorithm tweak. At 292.5/4,000 watch hours (~7.3%) accumulated over the last 365 days (per snapshot 2026-08-27), reaching the *remaining* 3,707.5 hours needed for the **current** 4,000-hour bar in the ~5 months left before Feb 1, 2027 is not realistic at the channel's current pace (292.5 hours took a full year). Practical read: the channel will almost certainly still be unmonetized when the bar moves to 8,000 hours — so the effective, real target from today forward is 8,000 hours, roughly double what SKILL.md and channel-snapshot.md have been tracking toward. This removes any "just grind Shorts views to squeak in under the old deadline" logic — there isn't enough runway left for that to work either way — and instead strengthens the case (independent of this finding) for building the coherent, long-form branded identity SKILL.md's Season 1 method calls for, since long-form is what the second finding says actually converts viewers into subscribers and sustains watch hours over the now-longer horizon. Flag this explicitly to the user: the monetization goalpost is moving before this channel reaches it.
+
+---
+
 ## 2026-08-27 — initial research pass
 
 **Query:** monetization path speed for new faceless channels (YPP
