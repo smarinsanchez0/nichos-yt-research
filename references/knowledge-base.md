@@ -15,6 +15,25 @@ away.
 
 ---
 
+## 2026-08-28 — visual production style for the video body (not thumbnails): real competitor styles compared
+
+**Query:** How do real faceless/science channels in or adjacent to the longevity niche actually build the visuals of the video itself (not the thumbnail) — 2D animated character, realistic-no-character, realistic-with-character, stickman, etc.?
+**Sources (directly inspected via browser, not just described secondhand):**
+- [Longevity Science Labs](https://www.youtube.com/@Longevity.ScienceLabs/videos) — 42 subs.
+- [Longevity Science News](https://www.youtube.com/@LongevityScienceNews/videos) — 49.5K subs, ~3 min avg length, ~2 uploads/week, ~$1.3K/mo est. (vidIQ).
+- [Kurzgesagt – In a Nutshell](https://www.youtube.com/@kurzgesagt/videos) — 25.5M subs, 3.6 min avg length, ~1 upload/week, ~$51.7K/mo est. (vidIQ).
+- WebSearch: "faceless science curiosity youtube channel visual style 2026", "faceless science documentary youtube channel AI generated realistic images Midjourney no character examples 2026".
+
+**Findings:**
+- **Correction to the 2026-08-27 entry**: Longevity Science Labs and Longevity Science News were logged then as "faceless/editorial" — direct inspection shows this is wrong. Both are **on-camera host/interview channels** (real scientists' faces, real host doing product reviews on camera, duotone black-and-white/magenta thumbnails with the host's face). Not a transferable model for a no-host channel.
+- **Kurzgesagt**, verified directly: signature **flat 2D vector animation with simple symbolic characters** (a rocket ship, birds, blob-people) over glowing neon/geometric backgrounds (hexagon grids, particle networks). Proven at massive scale, but it's a dedicated animation-studio operation (large in-house team) — not reproducible with a still-image AI generator alone.
+- General real finding (not tied to one named longevity channel, but documented as a live 2026 production pattern): faceless **documentary-style** channels increasingly build B-roll from **AI-generated realistic/cinematic imagery with no character on screen** — stack cited: Midjourney/DALL·E-class models for stills, Kling-class models for short animated B-roll clips, mixed with real stock footage. This is the format that maps directly onto tools already in this account (`KIE_AI_API_KEY` = Midjourney/Flux/Nano Banana/Ideogram/Seedream stills + video models; `PEXELS_API_KEY` = real stock supplement).
+- Also documented as real but lower-fit for this brand: **stock-footage compilation** (Bright Side model — high-volume, generic, aggressive upload cadence) and **stickman/simple-animation** (explicitly named in a real tutorial as the cheapest/fastest faceless entry point, free tools) — both viable but read as lower-production-value than the channel's current "Futuro de la Longevidad" bio-digital brand identity (teal/cyan DNA-and-neuron banner) calls for.
+
+**Applied how:** No real, verified, named faceless competitor exists inside the longevity niche specifically using the realistic-AI-imagery-no-character format — this is a genuine gap/opportunity, not a copy of a proven direct competitor. Recommended direction: realistic/cinematic AI-generated imagery, no on-screen character, continuing the banner's dark-background teal/cyan bio-science palette, produced with the account's existing `KIE_AI_API_KEY` (stills + short AI-video B-roll) supplemented by `PEXELS_API_KEY` for grounding real-world shots — pending the user's confirmation before adopting as the official production style.
+
+---
+
 ## 2026-08-28 — real faceless channels selling Hotmart infoproducts: monetization pattern
 
 **Query:** Find 10 real faceless YouTube channels that sell Hotmart infoproducts, verify real payment links in descriptions, and identify at what second in the video they start selling.
