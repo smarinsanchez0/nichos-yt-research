@@ -15,6 +15,23 @@ away.
 
 ---
 
+## 2026-08-27 — Scripzy script-writing process learned + verified hallucination
+
+**Query:** Generated all 10 Season 1 scripts via Scripzy (scripzy.app/script-lab, this account's paid tool) to study its writing style/structure/deliverable package for integration into this skill, then fact-checked a claim from the output.
+**Sources:**
+- 10 real generated scripts, `~/Downloads/Temporada 1/*.txt` (this account's own Scripzy credits)
+- [Global Prevalence of Glaucoma and Projections of Glaucoma Burden through 2040 (Ophthalmology/AAO)](https://www.aaojournal.org/article/s0161-6420(14)00433-3/abstract)
+- [Glaucoma Facts And Stats (Glaucoma Research Foundation)](https://glaucoma.org/articles/glaucoma-facts-and-stats)
+
+**Findings:**
+- Full write-up of the style/structure/deliverable pattern is now in `references/script-writing.md` — hook → real named anchor → early evidence-quality caveat → one analogy per mechanism → mid-video viewer question → explicit medical-disclaimer paragraph → widen to future research → philosophical closer → standard CTA sign-off.
+- **Verified hallucination**: Scripzy's Video 1 script (reprogramación celular) stated glaucoma affects "más de dos mil millones de personas" — the real, sourced figure is ~80 million (60 million for open-angle glaucoma specifically). A ~25x invented number, despite the brief explicitly instructing "no inventar cifras específicas."
+- The rest of that same script's factual content (ER-100, Yamanaka factors, FDA timeline, the specific eye conditions) matched what this skill had independently verified earlier the same session — so the tool is not uniformly unreliable, but it can silently invent specific statistics even under explicit instruction not to.
+
+**Applied how:** Added a hard non-negotiable to SKILL.md and script-writing.md: every concrete number in any generated script (Scripzy or otherwise) must be independently re-verified via WebSearch/WebFetch before the script is used for anything, exactly like this skill already requires for channel/niche claims. Never trust a generated script's statistics at face value.
+
+---
+
 ## 2026-08-27 — verified: real human trial for cellular reprogramming (ER-100)
 
 **Query:** cellular reprogramming epigenetic clinical trial 2026 FDA phase 1 aging Nature (independently verifying a claim the user's other AI assistant had made in an earlier, unrelated chat, before building a video topic on it)

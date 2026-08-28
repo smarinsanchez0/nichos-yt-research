@@ -210,6 +210,42 @@ propose a channel with pillars and a percentage split (e.g. 40% ciencia del
 descubrimiento / 35% aplicación práctica / 25% futuro-tecnología), so early
 videos can test which pillar performs best before committing further.
 
+## Script writing — once a topic is chosen
+
+When the user wants an actual narration script for a Season 1 (or any)
+topic, follow `references/script-writing.md` in full — it documents the
+real structure/style/deliverable-package pattern reverse-engineered from
+10 real scripts generated for this channel via **Scripzy**
+(scripzy.app/script-lab, this account's own paid tool, credits already
+available). Short version:
+
+- **Structure**: hook → named real anchor (scientist/year/institution) →
+  explicit evidence-quality caveat early ("primero, es importante
+  aclarar...") → one concrete analogy per mechanism → mid-video direct
+  question to the viewer → explicit non-medical-advice disclaimer for any
+  health-adjacent claim → widen to future research/open questions → a
+  philosophical closing beat → standard like/subscribe/bell sign-off.
+- **Deliverable package per video**: Guion + Descripción (emoji-heavy,
+  hook + disclaimer + hashtags) + ~25 Etiquetas (broad + specific +
+  recurring channel-brand tags) + Comentario fijado + 10 título variants
+  (ALL-CAPS, curiosity-framed) + 7 frases para miniatura + (in Scripzy's
+  UI only) 4 detailed AI thumbnail-image prompts.
+- **Mandatory fact-check pass, no exceptions**: a real, verified example
+  from this channel's own Season 1 — Scripzy's Video 1 script stated
+  glaucoma affects "más de dos mil millones de personas" when the real,
+  WebSearch-verified figure is ~80 million (a ~25x invention), despite the
+  brief explicitly saying not to invent figures. **Every concrete number
+  in any generated script must be independently re-verified with
+  WebSearch/WebFetch before the script is used for anything** — same
+  standard as this skill's own §Research pipeline. Cut or qualitatively
+  soften any number that can't be quickly verified.
+- If using Scripzy again: Nuevo Guion → Información Básica (a *long,
+  specific* Idea Central brief — the more precisely it names the real
+  facts/constraints, the less Scripzy invents) → Configuración (10 min /
+  Español) → Estilo Estándar → Generar. Bulk "Exportar ZIP" is guion-only;
+  use each script's own "Descargar" button for the full package. History
+  retains scripts only 30 days — export promptly.
+
 ## Monetization: a fast digital product, not a course
 
 Once the niche and Season 1 are set, propose one low-effort, low-ticket
@@ -252,7 +288,10 @@ the first product:
     caveat if relevant.
 11. **Report progress toward 4,000 hours / 1,000 subs** per §Daily
     operation.
-12. Deliver as one structured write-up (tables for scores/season list). If
+12. **If a script is requested**, follow §Script writing / 
+    `references/script-writing.md` — including the mandatory fact-check
+    pass on every number before delivering it.
+13. Deliver as one structured write-up (tables for scores/season list). If
     it's long and the user will want to revisit or share it, offer to
     publish it as an Artifact instead of leaving it only in chat.
 
@@ -262,6 +301,7 @@ the first product:
 |---|---|
 | `references/channel-snapshot.md` | The real, dated DescubrimientosFascinantes data pull: subscriber/watch-hour progress toward YPP, per-video views/CTR/retention, the full upload list, and the "top performers aren't the branded niche" finding. Overwrite with fresh numbers every time Studio is actually checked. |
 | `references/knowledge-base.md` | Dated log of every real source this skill has actually fetched/read — blogs, forum threads, studies, supplied videos/books — with URLs and findings. Append-only; never invent an entry. |
+| `references/script-writing.md` | The narration structure/style and full deliverable-package pattern learned from 10 real Scripzy-generated scripts, plus the verified hallucinated-statistic finding that makes a fact-check pass mandatory before any script ships. |
 
 ## Non-negotiables
 
@@ -281,3 +321,8 @@ the first product:
 - Never present the branded-niche pivot as already working when the real
   channel data says otherwise (see channel-snapshot.md §Key finding) —
   surface the tension, don't paper over it.
+- Never deliver a generated script (Scripzy or otherwise) without
+  independently fact-checking every concrete number in it first — verified
+  real case: a ~25x hallucinated statistic slipped through despite an
+  explicit "don't invent figures" instruction (see
+  `references/script-writing.md`).
