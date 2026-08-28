@@ -1,5 +1,46 @@
 # Script-writing process — learned from Scripzy (Season 1, 2026-08-27)
 
+## Voice: Gabo (ElevenLabs) — the channel's official narration voice
+
+**Voice ID: `o0SveC0zgHFuCsEO3vHR`** (public voice "Gabo - Deep, Evocative and
+Resonant", added to this account's voice library 2026-08-28 as "Gabo -
+Futuro de la Longevidad"). Peninsular Spanish accent, male, middle-aged.
+Official description: *"Deep, evocative, warm and resonant voice.
+Professional voice actor. Ideal for storytelling that lingers, from
+gripping documentaries to immersive audiobooks. It doesn't just speak — it
+resonates."* Chosen over this account's existing "Dan" voice
+(`9F4C8ztpNUmXkdDDbz3J`, category **Social Media**, "upbeat and modulate...
+great for shorts") specifically because Dan's register is wrong for
+10-minute documentary narration — Dan stays reserved for El Mecánico's
+fast-cut ad content (AURA/talking-parts-storyteller), never for this
+channel.
+
+Real, verified alternatives considered (not chosen, kept here in case
+Gabo's fit changes): Yeiden - Warm Young Narrator (Latin American accent,
+explicitly labeled "documentaries... curiosity", but only 132 uses at
+selection time — under-tested); Juanjo Relatos (Peninsular, "historical
+documentaries... hypnotic", 14.1K uses); Brian - Resonant Silky Clear
+(Latin American, 787 uses).
+
+**Generation settings used** (model `eleven_multilingual_v2`,
+`stability: 0.5`, `similarity_boost: 0.75`, `style: 0.3`,
+`use_speaker_boost: true`) — reuse these exact values for consistency
+across the season unless a specific episode needs a deliberate deviation.
+
+**Account quota is real and tight**: this ElevenLabs account is on the
+**Starter tier — 40,000 characters/month**. The 10 full Season 1 scripts
+total ~90,000 characters of narration alone — the monthly quota cannot
+cover the whole season in one pass. Always check
+`GET /v1/user/subscription` (`character_count` vs `character_limit`)
+before batch-generating, and never assume enough quota remains — the real
+number the first time this was checked (2026-08-27) was only 29,776
+characters remaining that month, later dropping further as generations
+ran. If quota won't cover a request, say so and let the user decide
+(wait for reset, upgrade the plan themselves, or prioritize which
+episodes) — never silently truncate a script to fit.
+
+
+
 This process was reverse-engineered from 10 real 10-minute scripts generated
 with **Scripzy** (scripzy.app/script-lab, "Estilo Estándar"), using this
 account's own credits, for the Temporada 1 topics. It documents both the
