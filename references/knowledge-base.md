@@ -15,6 +15,28 @@ away.
 
 ---
 
+## 2026-08-28 — real faceless channels selling Hotmart infoproducts: monetization pattern
+
+**Query:** Find 10 real faceless YouTube channels that sell Hotmart infoproducts, verify real payment links in descriptions, and identify at what second in the video they start selling.
+**Sources (6 fully verified — real channel, real go.hotmart.com/pay.hotmart.com link confirmed, faceless format confirmed by direct inspection):**
+- [Trucos Positivos — "La Hormiga y su FRACASO"](https://www.youtube.com/watch?v=5d25G-rDaMk) — 21.8K subs, 1.27M views, link: go.hotmart.com/J90000052M (Máster de Desarrollo Personal)
+- [Aprende Motiva Inspira — "La Historia del Lápiz"](https://www.youtube.com/watch?v=5xECW2WKfRg) — 21.2K subs, links: go.hotmart.com/A104702200O, go.hotmart.com/V104702225I
+- [Vive Logicamente — "La verdad sobre producir alimento en poco espacio"](https://www.youtube.com/watch?v=Q1lOo57_eRg) — 33K subs, link: go.hotmart.com/N81975298P (guía de granja orgánica)
+- [Vid salud natural — "Remedios Naturales para Apoyar en la Lucha contra el Cáncer"](https://www.youtube.com/watch?v=9tAdtGjQ6FA) — 593 subs, link: go.hotmart.com/F93416755A
+- [Maestría del Ser - Edgar y Alma — "Guía de Los Ángeles"](https://www.youtube.com/watch?v=s44MJuGuYDQ) — 41.6K subs, links: go.hotmart.com/J74031068H + pay.hotmart.com/J74031068H (clase Arcángel Ariel — checkout page independently confirmed live/real)
+- [LA BIBLIA SV — "Jesús Habla con Autoridad"](https://www.youtube.com/watch?v=Mx--k7T_4ZM) — 2.26K subs, link: go.hotmart.com/F102953094R (ebook la biblia)
+
+**Findings:**
+- **Central pattern, confirmed by full transcript read on the highest-view example (Trucos Positivos, 4:52 video)**: the narration/guion **never mentions the product, the link, or any sales language at any timestamp**. The only spoken CTA is a generic "dale like y suscríbete" near the end. Monetization happens **100% through the description**, not through an in-video verbal pitch — contradicts the premise that these channels "start selling" at some specific spoken second.
+- All 6 verified channels place the Hotmart link in the description as one item in a short list (1-5 links: an app, an affiliate program, a channel recommendation, then the Hotmart product) — framed as "recursos/ayuditas para tu camino," not as a hard sell.
+- Niches where this pattern shows up: motivational AI-narrated fables, life-reflection/parábola channels, homesteading/organic farming, natural-health remedies, spiritual/tarot-oracle readings, Christian devotional content — all faceless, all narration-over-broll-or-AI-imagery format.
+- **Contrast, not counted above (excluded — not faceless)**: Patrice Lafforgue (211K subs) and Verdadera Seducción (1.54M subs), both in the "recuperar a tu ex" niche, DO pitch verbally and on-camera with a visible host — that niche skews toward personality-led coaching, not faceless value content.
+- Checked and explicitly does NOT have a Hotmart link: "Activando tu mente" (54.4K subs, Joe Dispenza audiolibro channel) — monetizes via engagement/comments and cross-promotion to its own other videos, no product funnel. Confirms not every big faceless channel sells an infoproduct.
+
+**Applied how:** For DescubrimientosFascinantes, the real, verified pattern says: don't force a spoken sales pitch into the narration (none of the 6 real examples do this) — instead place the digital-product link in the description as one of a short "resources" list, worded as help rather than a pitch. This matches and reinforces SKILL.md's own existing monetization funnel design (video → lead magnet → email → paid product), now with real precedent instead of just a generic recommendation.
+
+---
+
 ## 2026-08-27 — Scripzy script-writing process learned + verified hallucination
 
 **Query:** Generated all 10 Season 1 scripts via Scripzy (scripzy.app/script-lab, this account's paid tool) to study its writing style/structure/deliverable package for integration into this skill, then fact-checked a claim from the output.
