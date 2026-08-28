@@ -27,17 +27,62 @@ documentaries... hypnotic", 14.1K uses); Brian - Resonant Silky Clear
 `use_speaker_boost: true`) — reuse these exact values for consistency
 across the season unless a specific episode needs a deliberate deviation.
 
-**Account quota is real and tight**: this ElevenLabs account is on the
-**Starter tier — 40,000 characters/month**. The 10 full Season 1 scripts
-total ~90,000 characters of narration alone — the monthly quota cannot
-cover the whole season in one pass. Always check
-`GET /v1/user/subscription` (`character_count` vs `character_limit`)
-before batch-generating, and never assume enough quota remains — the real
-number the first time this was checked (2026-08-27) was only 29,776
-characters remaining that month, later dropping further as generations
-ran. If quota won't cover a request, say so and let the user decide
-(wait for reset, upgrade the plan themselves, or prioritize which
-episodes) — never silently truncate a script to fit.
+**Direct ElevenLabs account quota is real and tight**: the direct
+ElevenLabs account (`ELEVENLABS_API_KEY`) is on the **Starter tier —
+40,000 characters/month**. The 10 full Season 1 scripts total ~90,000
+characters of narration alone — that quota alone cannot cover the whole
+season. Videos 1-5 (~46,742 chars) were generated directly against
+`api.elevenlabs.io` before the quota ran out mid-batch (confirmed via
+`GET /v1/user/subscription`).
+
+## Preferred path: DubVoice.ai (not raw ElevenLabs) for anything beyond quota
+
+**`DUBVOICE_API_KEY`** (in `~/.zshrc`, global — usable across every
+project on this account, not just NICHOS) is a separate third-party
+service, **dubvoice.ai**, that wraps multiple TTS providers (ElevenLabs,
+Minimax, Edge TTS, Kokoro TTS, Vbee, Fish Audio) behind its own API and
+credit pool. Confirmed real and independent from the direct ElevenLabs
+key — tested `DUBVOICE_API_KEY` directly against `api.elevenlabs.io` and
+it was rejected (`invalid_api_key`), so these are two separate accounts/
+auth layers, not the same quota. DubVoice's own balance had **1,001,000
+credits** on 2026-08-27 (1 character ≈ 1 credit on the ElevenLabs
+provider) — enough for the entire season and far more, without touching
+the direct ElevenLabs Starter quota at all. Videos 6-10 were generated
+this way once the direct-ElevenLabs quota ran out.
+
+**API basics** (full docs at `dubvoice.ai/es/dashboard/api-docs`, or ask
+Claude to refetch since it's account-specific and may change):
+- Base: `https://www.dubvoice.ai/api/v1/tts`, `Authorization: Bearer
+  $DUBVOICE_API_KEY`.
+- **Async task pattern**: `POST /tts` with `{text, voice_id, model_id,
+  language}` returns `{task_id, status: "pending"}` immediately — poll
+  `GET /tts/{task_id}` until `status` is `completed` (or `failed`), then
+  download the public `result` (mp3) and `srt_url` (SRT subtitles,
+  **free, don't consume credits**) from Supabase storage. A single ~9-10K
+  character script takes roughly 30-60s to complete.
+- `voice_id` is the *same raw ElevenLabs voice ID* — Gabo's
+  `o0SveC0zgHFuCsEO3vHR` worked identically through DubVoice with no
+  translation needed, confirming DubVoice's ElevenLabs provider is a
+  passthrough.
+- Supports inline performance tags dropped directly into the text (e.g.
+  `[warm]`, `[pause]`, `[curiosity]`, `[storytelling]`) for pacing/
+  emotion/style — not used yet for this channel's scripts, but available
+  for future episodes if finer delivery control is wanted; there's also a
+  server-side `POST /api/tts/enhance` that auto-injects these tags from
+  plain text ("Enhance text with AI" button in the dashboard, costs a
+  small flat credit fee).
+- **Default `voice_settings` fields (`stability`, `similarity_boost`,
+  `style`, `use_speaker_boost`) are accepted for backward compat but
+  silently ignored** — DubVoice's actual delivery control is the inline
+  tag system above, not those numeric knobs. Don't rely on them here even
+  though the direct ElevenLabs API still honors them.
+
+**Practical rule going forward**: default to DubVoice for this channel's
+TTS needs (bigger shared pool, free SRT, multi-provider fallback if
+ElevenLabs-specific credits ever run low) and only fall back to the
+direct ElevenLabs key for anything DubVoice's API doesn't expose. Always
+check real remaining balance before a batch — never assume either
+account's quota, on either key, without checking first.
 
 
 
