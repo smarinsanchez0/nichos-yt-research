@@ -15,6 +15,71 @@ away.
 
 ---
 
+## 2026-08-27 — verified: real human trial for cellular reprogramming (ER-100)
+
+**Query:** cellular reprogramming epigenetic clinical trial 2026 FDA phase 1 aging Nature (independently verifying a claim the user's other AI assistant had made in an earlier, unrelated chat, before building a video topic on it)
+**Sources:**
+- [FDA go-ahead to test cellular rejuvenation therapy in humans (Nature Biotechnology)](https://www.nature.com/articles/s41587-026-03037-z)
+- [FDA clears first human trial of epigenetic reprogramming therapy (Longevity.Technology)](https://longevity.technology/news/fda-clears-first-human-trial-of-epigenetic-reprogramming-therapy/)
+- [Life Biosciences Announces FDA Clearance of IND Application for ER-100 in Optic Neuropathies](https://www.lifebiosciences.com/life-biosciences-announces-fda-clearance-of-ind-application-for-er-100-in-optic-neuropathies/)
+- [The First Clinical Trial of Partial Reprogramming Will Start Soon (Fight Aging!)](https://www.fightaging.org/archives/2026/02/the-first-clinical-trial-of-partial-reprogramming-will-start-soon/)
+
+**Findings:**
+- Confirmed real and precise: Life Biosciences got FDA clearance (Jan 28,
+  2026) for a Phase 1 human trial of **ER-100**, a gene therapy delivering
+  the Yamanaka factors OCT-4/SOX-2/KLF-4 via AAV vector to partially
+  reprogram cells toward a younger epigenetic state.
+- The trial specifically targets two **eye diseases** — open-angle
+  glaucoma and NAION (a form of optic neuropathy) — not general anti-aging;
+  the therapy exists to test safety/tolerability/immune response/visual
+  outcomes in those patients, not to "reverse aging" broadly.
+- Published in Nature Biotechnology, vol. 44, 2026.
+
+**Applied how:** This is a real, citable, and precise anchor for a Season 1
+video (see the Season 1 proposal delivered to the user) — the story is
+genuinely "world-first human trial of cellular reprogramming," but the
+accurate framing is specifically about treating two eye diseases, not a
+generic rejuvenation cure; any script built on this must keep that
+distinction clear even while using a curiosity-driven title.
+
+---
+
+## 2026-08-27 — real competitor channels in the longevity/aging-science niche
+
+**Query:** best longevity science youtube channels 2026 aging biology faceless channel examples
+**Sources:**
+- [Top 20 Aging & Longevity Influencers in 2026 (Favikon)](https://www.favikon.com/blog/top-aging-longevity-influencers)
+- [Longevity Science Labs (YouTube)](https://www.youtube.com/@Longevity.ScienceLabs)
+- [Longevity Science News (YouTube)](https://www.youtube.com/@LongevityScienceNews)
+- [Better Health While Aging (YouTube)](https://www.youtube.com/c/BetterHealthWhileAging)
+- [Lifespan News (YouTube)](https://www.youtube.com/c/LifespanNews)
+
+**Findings:**
+- Real named competitors exist in two distinct shapes: **expert-led,
+  face-on-camera** channels (Better Health While Aging — geriatrician Dr.
+  Leslie Kernisan; Lifespan with Dr. David Sinclair) and **faceless/
+  editorial** channels (Longevity Science Labs, Longevity Science News,
+  Lifespan News) that cover the same science without a host.
+- Favikon's 2026 "Top 20" ranking is dominated by personality-led
+  influencers (Huberman, Attia, Sinclair, Bryan Johnson) — none of these
+  are direct competitors for a faceless channel, but they're the authority
+  sources a faceless channel would cite/summarize.
+- **Kurzgesagt** (huge faceless animation channel) has covered aging
+  biology/regenerative medicine specifically with input from the Lifespan
+  Research Institute — direct proof that the "animated explainer" faceless
+  format works at scale for this exact topic, not just talking-head
+  formats.
+
+**Applied how:** Confirms a faceless format is viable and already proven in
+this niche (Kurzgesagt, Lifespan News, Longevity Science Labs/News) — this
+isn't an unproven bet. It also means DescubrimientosFascinantes is
+competing against channels with real institutional backing (Lifespan
+Research Institute) for the editorial/faceless lane specifically — pushes
+toward a differentiated angle (see Season 1 below) rather than generic
+"aging news" that Lifespan News already owns.
+
+---
+
 ## 2026-08-27 — YPP monetization bar doubling (Feb 2027) + Shorts-to-subscriber conversion data
 
 **Query:** YouTube algorithm/monetization changes 2026, and why Shorts views don't convert to subscribers (relevant to this channel's course-sale-Shorts-vs-branded-niche tension in channel-snapshot.md §Key finding)
