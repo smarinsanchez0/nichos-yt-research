@@ -15,6 +15,26 @@ away.
 
 ---
 
+## 2026-08-28 — algorithm penalty for mixed-niche channels (2026): direct bearing on the course-sale-vs-longevity tension
+
+**Query:** Does the 2026 YouTube recommendation algorithm treat a channel's topic mix/consistency as a distinct ranking signal — i.e. does publishing videos across unrelated niches (as this channel does: course-sale/AUTODATA promos alongside longevity/science content) measurably hurt distribution, separate from any single video's own quality?
+**Sources (WebSearch only this run — WebFetch was unavailable, see note below):**
+- [How the YouTube Algorithm Works in 2026: Updates & Tips (vidIQ)](https://vidiq.com/blog/post/understanding-youtube-algorithm/)
+- [YouTube Algorithm Updates 2026: Every Confirmed Change Explained (OutlierKit)](https://outlierkit.com/resources/youtube-algorithm-updates/)
+- [YouTube Algorithm 2026: How to Get Your Videos Recommended (Dataslayer)](https://www.dataslayer.ai/blog/youtube-algorithm-2025-how-to-get-your-videos-recommended)
+- [How does the YouTube algorithm work in 2026? (SocialBee)](https://socialbee.com/blog/youtube-algorithm/)
+- [YouTube Algorithm 2026: 5 Big Shifts Creators Must Know (Postigniter)](https://postigniter.com/blog/youtube-news-today-2026-algorithm-shifts-and-their-impact-on-creators)
+
+**Findings:**
+- Consistent, cross-source claim (corroborated across two separate WebSearch passes with different query angles, so treat as directionally solid even though no single article was fully read via WebFetch): the 2026 algorithm evaluates **topic consistency at the channel level**, not just per-video quality. A channel publishing ten videos on one subject gives YouTube a stronger audience-matching signal than ten videos across ten unrelated subjects — the recommendation system "builds a clearer model" of who to show a focused channel to, and mixed/generic-appeal content is filtered out faster.
+- A separate, related 2026 mechanic cited: YouTube now clusters recommendations around **viewer watch-history micro-niches** — content that matches a tight, specific interest cluster gets surfaced to small/new channels even without prior scale, which favors a narrow, coherent identity over a broad one.
+- General 2026 framing repeated across sources (already partly known from the 2026-08-27 entry, but reinforced here): ranking leans on session-level satisfaction/watch-time contribution more than single-video view spikes, and evaluation increasingly looks at the channel's whole library rather than any one upload in isolation.
+- **Operational note, not a niche finding:** WebFetch to every attempted domain this run (forums.tomsguide.com, videos.feedspot.com, outlierkit.com, vidiq.com, postigniter.com, air.io, socialpilot.co, even techcrunch.com as a control) returned `EGRESS_BLOCKED` from the network proxy — this looks like a session-wide WebFetch outage today, not a domain-specific block (prior runs fetched vidiq.com, techcrunch.com, forbes.com etc. fine). Findings above are WebSearch-snippet-level, not full-article reads; re-verify with WebFetch once it's reachable again, and don't assume WebFetch is permanently broken for this skill.
+
+**Applied how:** This is direct, mechanism-level support for the tension channel-snapshot.md §Key finding already flags qualitatively. It reframes that tension from "the algorithm just happens to favor the course-sale Shorts right now" to a more specific, actionable claim: **actively continuing to mix AUTODATA/course-sale-pack uploads with longevity/science uploads on the same channel is plausibly suppressing the reach of the branded content specifically**, because the mixed signal makes it harder for YouTube's channel-level topic model to know which audience to match this channel to at all. Decision point for the user (not resolved here, since it's a real content/business trade-off — the course-sale videos are the channel's only videos with meaningful views to date): either (a) commit fully to the longevity/science identity going forward and stop adding new course-sale/AUTODATA uploads so the topic-consistency signal can rebuild, accepting a near-term views dip, or (b) split the two lines onto separate channels so neither pollutes the other's topic model. Recommend (a) if the real goal is the stated one (YPP via a coherent monetizable identity) — see also the 2026-08-27 entry on the doubled 8,000-hour bar, which already argues for long-form branded consistency over chasing short-term Shorts views.
+
+---
+
 ## 2026-08-28 — visual production style for the video body (not thumbnails): real competitor styles compared
 
 **Query:** How do real faceless/science channels in or adjacent to the longevity niche actually build the visuals of the video itself (not the thumbnail) — 2D animated character, realistic-no-character, realistic-with-character, stickman, etc.?
