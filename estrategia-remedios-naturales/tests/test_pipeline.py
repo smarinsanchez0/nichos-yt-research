@@ -594,3 +594,31 @@ def test_cli_doctor_runs():
     root = Path(__file__).resolve().parents[1]
     r = subprocess.run([sys.executable, "-m", "app.cli", "doctor"], cwd=root, capture_output=True, text=True, timeout=60)
     assert "ffmpeg" in r.stdout
+
+
+def test_dubvoice_retries_connection_reset(monkeypatch, tmp_path):
+    import importlib
+    importlib.reload(dubvoice)
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+    img = tmp_path / "a.jpg"; img.write_bytes(_jpg())
+    n = {"post": 0}
+
+    class R:
+        status_code = 200
+        text = "x"
+        def __init__(self, j): self._j = j
+        def json(self): return self._j
+
+    def fake(method, url, **kw):
+        if method == "POST":
+            n["post"] += 1
+            if n["post"] < 3:
+                raise RuntimeError("Sin conexion con https://www.dubvoice.ai/api/v1/video: [Errno 54] Connection reset by peer")
+            return R({"task_id": "t"})
+        return R({"status": "completed", "result": "https://x/v.mp4"})
+
+    monkeypatch.setattr(dubvoice, "request", fake)
+    monkeypatch.setattr(dubvoice, "download", lambda u: b"V")
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    dubvoice._poll_cache.clear()
+    assert dubvoice.veo("p", img)[1] == b"V" and n["post"] == 3

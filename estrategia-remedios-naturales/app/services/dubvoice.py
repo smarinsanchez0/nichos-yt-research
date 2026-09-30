@@ -99,11 +99,19 @@ class Cancelled(RuntimeError):
 
 def _post(service: str, path: str, body: dict, timeout: float = 600, auth: str = "bearer", cancel=None):
     """POST con espera automatica cuando DubVoice limita (429: max 3 en paralelo / 10 por minuto)."""
-    for attempt in range(20):
+    net_errors = 0
+    for attempt in range(24):
         if cancel is not None and cancel.is_set():
             raise Cancelled("Cancelado")
         _throttle()
-        r = request("POST", f"{BASE}{path}", json=body, headers=_h(auth), timeout=timeout, retries=1)
+        try:
+            r = request("POST", f"{BASE}{path}", json=body, headers=_h(auth), timeout=timeout, retries=1)
+        except RuntimeError as e:          # corte de conexion (p. ej. 'Connection reset by peer'): reintentar con espera
+            net_errors += 1
+            if net_errors >= 4 or "Sin conexion" not in str(e):
+                raise
+            time.sleep(5 * net_errors)
+            continue
         if r.status_code != 429:
             return r
         try:
@@ -214,7 +222,7 @@ def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str 
         resolution: str = "720p", progress=None, timeout: float = 600, duration: float | None = None,
         cancel=None) -> tuple[str, bytes]:
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect, "resolution": resolution,
-            "ref_images": [data_uri(image_path, 1600)], "mode_image": "frame"}
+            "ref_images": [data_uri(image_path, 1280)], "mode_image": "frame"}
     if model == "omniflash":
         body["duration"] = tier_for(duration or 8, model)
     tid, urls = _submit_and_wait("DubVoice (video)", "/api/v1/video", body,
