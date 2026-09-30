@@ -147,7 +147,7 @@ function v5(p) {
   <div class="grid">${clips.map(({ s, c }) => { const jn = `clip:${s.idx}:${c.idx}`; return `<div class="card"><b>Escena ${s.idx + 1} · clip ${c.idx + 1}</b> ${c.status === 'done' && !c.stale ? '<span class="tag ok">listo</span>' : c.stale && c.status === 'done' ? '<span class="tag warn">desactualizado</span>' : c.status === 'running' ? '<span class="tag run">generando…</span>' : c.status === 'error' ? '<span class="tag err">error</span>' : '<span class="tag">pendiente</span>'}
    ${c.file ? `<video controls preload="metadata" class="thumb" src="${file(c.file)}?d=${Math.round(c.duration * 100)}"></video>` : `<img class="thumb" src="${file(s.image.file)}" style="opacity:.5">`}
    <small class="muted">${esc(c.dialogue) || '(sin diálogo)'}</small><div class="muted" style="font-size:11px">⏱ necesita ~${(c.target || 0).toFixed(1)} s${c.asked_seconds ? ` · pedido ${c.asked_seconds} s` : ''}</div>${c.warning ? `<div class="tag warn" style="white-space:normal">${esc(c.warning)}</div>` : ''}${c.error ? `<div class="tag err" style="white-space:normal">${esc(c.error)}</div>` : ''}
-   <p><button class="ghost" ${running(jn) || running('videos') ? 'disabled' : ''} data-act="regenClip" data-i="${s.idx}" data-j="${c.idx}">🔄 ${c.file ? 'Regenerar' : 'Generar'}</button></p>${jobBox(jn, '')}</div>`; }).join('')}</div>`;
+   <p><button class="ghost" ${running(jn) || running('videos') ? 'disabled' : ''} data-act="regenClip" data-i="${s.idx}" data-j="${c.idx}">🔄 ${c.file ? 'Regenerar' : 'Generar'}</button></p>${jobBox(jn, '')}${running(jn) || c.status === 'running' ? `<p><button class="danger" data-act="resetJob" data-job="${running(jn) ? jn : 'videos'}">⛔ Detener espera</button></p>` : ''}</div>`; }).join('')}</div>`;
 }
 
 function v6(p) {
@@ -207,7 +207,7 @@ document.addEventListener('click', async e => {
     else if (a === 'redoPrompts') { toast('Reescribiendo prompts de imagen…'); await api('POST', `${base}/analyze`, { force: ['prompts'] }); }
     else if (a === 'redoScenes') await api('POST', `${base}/analyze`, { force: ['scenes'] });
     else if (a === 'genImages') await api('POST', `${base}/images/generate`, {});
-    else if (a === 'resetJob') { await api('POST', `${base}/jobs/${el.dataset.job}/reset`); toast('Tarea detenida. Pulsa "Generar imágenes faltantes" para continuar.'); }
+    else if (a === 'resetJob') { await api('POST', `${base}/jobs/${el.dataset.job}/reset`); toast('Tarea detenida. Puedes volver a lanzarla con su botón.'); }
     else if (a === 'regenAll') { if (confirm('Se generarán de nuevo todas las imágenes con tu avatar (las anteriores quedan en el historial de versiones y se gastan créditos otra vez). ¿Continuar?')) await api('POST', `${base}/images/generate`, { scenes: S.p.scenes.map(x => x.idx) }); }
     else if (a === 'approveAll') await api('POST', `${base}/images/approve_all`);
     else if (a === 'approve') { const s = S.p.scenes[i]; await api('POST', `${base}/images/${i}/approve`, { approved: !s.image.approved }); }

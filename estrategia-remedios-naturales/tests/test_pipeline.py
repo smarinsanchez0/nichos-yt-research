@@ -451,3 +451,41 @@ def test_omniflash_sends_duration(monkeypatch, tmp_path):
     dubvoice._poll_cache.clear(); sent.clear()
     dubvoice.veo("p", img, model="veo-3.1-fast", duration=3.2)
     assert "duration" not in sent
+
+
+def test_kie_veo_polling_progress_and_timeout(monkeypatch):
+    import importlib
+    importlib.reload(kie)
+    monkeypatch.setenv("KIE_API_KEY", "k")
+    msgs, polls = [], {"n": 0}
+
+    class R:
+        status_code = 200
+        text = "x"
+        def __init__(self, j): self._j = j
+        def json(self): return self._j
+
+    def fake(method, url, **kw):
+        if method == "POST":
+            return R({"code": 200, "data": {"taskId": "abcdef123456"}})
+        polls["n"] += 1
+        if polls["n"] < 3:
+            return R({"code": 200, "data": {"successFlag": 0}})
+        return R({"code": 200, "data": {"successFlag": 1, "response": {"resultUrls": ["https://x/v.mp4"]}}})
+
+    monkeypatch.setattr(kie, "request", fake)
+    monkeypatch.setattr(kie, "download", lambda u: b"VID")
+    monkeypatch.setattr(kie.time, "sleep", lambda s: None)
+    tid, data = kie.veo_generate("p", "https://img", progress=msgs.append)
+    assert data == b"VID" and any("generando" in m for m in msgs)
+
+    # nunca termina: debe fallar con el ultimo estado, no colgarse
+    clock = iter(range(0, 100000, 400))
+    monkeypatch.setattr(kie.time, "time", lambda: next(clock))
+    monkeypatch.setattr(kie, "request", lambda m, u, **k: R({"code": 200, "data": {"taskId": "t"}}) if m == "POST"
+                        else R({"code": 200, "data": {"successFlag": 0}}))
+    try:
+        kie.veo_generate("p", "https://img", timeout=720)
+        assert False, "debio agotar el tiempo"
+    except RuntimeError as e:
+        assert "no termino" in str(e) and "successFlag" in str(e)

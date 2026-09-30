@@ -94,3 +94,6 @@ def force_reset(pid: str, name: str) -> None:
         for s in p.get("scenes", []):
             if s.get("img_state") == "running":
                 s["img_state"], s["img_error"] = "error", "Interrumpida"
+            for c in s.get("clips", []):
+                if c.get("status") == "running":
+                    c["status"], c["error"] = "error", "Detenido manualmente. Puedes volver a generarlo."
