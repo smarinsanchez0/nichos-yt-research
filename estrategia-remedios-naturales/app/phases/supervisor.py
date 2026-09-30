@@ -357,12 +357,14 @@ class Supervisor:
             if not unresolved:
                 break
         ok = sum(1 for k in self.keys if self.state.get(k) == "accepted")
-        bad = [self.clip_label(k) for k in self.keys if self.state.get(k) != "accepted"]
+        bad = [self.clip_label(k) + (f" [{self.last_error[k][:110]}]" if self.last_error.get(k) else "")
+               for k in self.keys if self.state.get(k) != "accepted"]
         self.log(f"🏁 Terminado: {ok}/{len(self.keys)} clips aceptados" + (f"; sin resolver: {', '.join(bad)}" if bad else "") +
                  (f". {self._summary}" if self._summary else "") + f" (≈{self.spent:,} creditos)")
         self.pool.shutdown(wait=False, cancel_futures=True)
         if bad and not self.stop_flag.is_set():
-            raise RuntimeError("Clips sin resolver: " + ", ".join(bad) + ". Revisa la bitacora.")
+            raise RuntimeError("Clips sin resolver: " + "; ".join(bad) + ". Vuelve a pulsar el boton del supervisor: "
+                               "solo reintenta esos clips (los demas quedan guardados).")
 
     def _on_event(self, key, kind, msg, evs: list[str]) -> None:
         if kind == "done":
