@@ -24,8 +24,12 @@ CREDITS = {"veo-3.1-fast": 7500, "veo-3.1-lite": 9100, "veo-3.1": 17000, "meta":
            "nano-banana-2-lite": 500, "nano-banana-2": 1000, "nano-banana-pro": 3500, "grok-image": 1000}
 
 
-def _h() -> dict:
-    return {"Authorization": f"Bearer {require_key('dubvoice')}", "Content-Type": "application/json"}
+def _h(auth: str = "bearer", json_body: bool = True) -> dict:
+    key = require_key("dubvoice")
+    h = {"Authorization": f"Bearer {key}"} if auth == "bearer" else {"X-API-Key": key}
+    if json_body:
+        h["Content-Type"] = "application/json"
+    return h
 
 
 def data_uri(path: Path, max_side: int = 1280) -> str:
@@ -74,10 +78,10 @@ def _urls(d: dict) -> list[str]:
     return []
 
 
-def _post(service: str, path: str, body: dict, timeout: float = 600):
+def _post(service: str, path: str, body: dict, timeout: float = 600, auth: str = "bearer"):
     """POST con espera automatica cuando DubVoice limita (429: max 3 en paralelo / 10 por minuto)."""
     for attempt in range(20):
-        r = request("POST", f"{BASE}{path}", json=body, headers=_h(), timeout=timeout, retries=1)
+        r = request("POST", f"{BASE}{path}", json=body, headers=_h(auth), timeout=timeout, retries=1)
         if r.status_code != 429:
             return r
         try:
@@ -129,8 +133,9 @@ _poll_cache: dict[str, tuple[str, str]] = {}
 
 
 def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[tuple[str, str]],
-                     timeout: float, interval: float, progress=None, post_timeout: float = 600) -> tuple[str, list[str]]:
-    d = _check(service, _post(service, path, body, post_timeout))
+                     timeout: float, interval: float, progress=None, post_timeout: float = 600,
+                     auth: str = "bearer") -> tuple[str, list[str]]:
+    d = _check(service, _post(service, path, body, post_timeout, auth))
     tid = _task_id(d)
     urls = _urls(d)
     if urls and _status(d) not in {"pending", "processing", "queued"}:
@@ -142,7 +147,7 @@ def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[
 
     def get():
         for p_, key in ([_poll_cache[path]] if path in _poll_cache else poll_candidates):
-            g = request("GET", f"{BASE}{p_}", params={key: tid}, headers=_h())
+            g = request("GET", f"{BASE}{p_}", params={key: tid}, headers=_h(auth))
             if g.status_code == 404:
                 continue
             _poll_cache[path] = (p_, key)
@@ -199,9 +204,55 @@ def list_voices(gender: str | None = None, language: str = "en", n: int = 40) ->
     return out
 
 
-def voice_change(audio_url: str, voice_id: str, progress=None) -> bytes:
-    """Cambia la voz de un audio (URL publica) a `voice_id` conservando tiempos (2.000 creditos/min)."""
+_voice_mode: list[str] = []       # forma de llamada que funciono (se recuerda para los siguientes clips)
+
+
+def _voice_via_json(audio_url: str, voice_id: str, auth: str, progress=None) -> bytes:
     tid, urls = _submit_and_wait("DubVoice (cambio de voz)", "/api/v1/voice-changer",
                                  {"audio_url": audio_url, "target_voice_id": voice_id},
-                                 [("/api/v1/voice-changer", "task_id"), ("/api/v1/voice-changer", "id")], 600, 5, progress)
+                                 [("/api/v1/voice-changer", "task_id"), ("/api/v1/voice-changer", "id")], 600, 5, progress, auth=auth)
     return download(urls[0])
+
+
+def _voice_via_upload(audio_path: Path, voice_id: str, auth: str, progress=None) -> bytes:
+    """Ruta antigua con archivo directo (multipart). Puede devolver el audio o un JSON con URL/tarea."""
+    with open(audio_path, "rb") as fh:
+        r = request("POST", f"{BASE}/api/voice-changer", headers=_h(auth, json_body=False), timeout=600, retries=1,
+                    data={"target_voice_id": voice_id, "voice_id": voice_id}, files={"file": (audio_path.name, fh.read(), "audio/mpeg")})
+    if r.status_code not in (200, 201, 202):
+        raise fail("DubVoice (cambio de voz, subida directa)", r)
+    if (r.headers.get("content-type") or "").startswith("audio/") or r.content[:3] == b"ID3":
+        return r.content
+    d = _flat(r.json())
+    urls = _urls(d)
+    if urls:
+        return download(urls[0])
+    tid = _task_id(d)
+    if not tid:
+        raise RuntimeError(f"DubVoice (cambio de voz) respuesta inesperada: {str(d)[:200]}")
+    urls = _wait(lambda: _check("DubVoice (cambio de voz)", request(
+        "GET", f"{BASE}/api/voice-changer", params={"task_id": tid}, headers=_h(auth))), "DubVoice (cambio de voz)", 600, 5)
+    return download(urls[0])
+
+
+def voice_change(audio_url: str | None, voice_id: str, progress=None, audio_path: Path | None = None) -> bytes:
+    """Cambia la voz a `voice_id` conservando tiempos. Prueba varias formas de llamada y recuerda la que funcione."""
+    attempts = [("json-bearer", lambda: _voice_via_json(audio_url, voice_id, "bearer", progress)),
+                ("json-xapikey", lambda: _voice_via_json(audio_url, voice_id, "xapikey", progress)),
+                ("upload-bearer", lambda: _voice_via_upload(audio_path, voice_id, "bearer", progress)),
+                ("upload-xapikey", lambda: _voice_via_upload(audio_path, voice_id, "xapikey", progress))]
+    if not audio_url:
+        attempts = [a for a in attempts if a[0].startswith("upload")]
+    if not audio_path:
+        attempts = [a for a in attempts if a[0].startswith("json")]
+    if _voice_mode:
+        attempts = [a for a in attempts if a[0] == _voice_mode[0]] + [a for a in attempts if a[0] != _voice_mode[0]]
+    errs = []
+    for name, fn in attempts:
+        try:
+            out = fn()
+            _voice_mode[:] = [name]
+            return out
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"{name}: {str(e)[:160]}")
+    raise RuntimeError(" || ".join(errs))

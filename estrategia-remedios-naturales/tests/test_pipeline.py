@@ -99,7 +99,7 @@ def client():
     dubvoice.list_voices = lambda gender=None, language="en", n=40: [
         v for v in eleven.list_voices() if not gender or v["gender"] == gender]
     kie.upload_file = lambda path, mime="audio/mpeg", folder="": "https://example.com/a.mp3"
-    dubvoice.voice_change = lambda url, vid, progress=None: _mp3(8)
+    dubvoice.voice_change = lambda url, vid, progress=None, audio_path=None: _mp3(8)
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": _jpg()
     kie.upload_image = lambda path: "https://example.com/x.jpg"
     kie.veo_generate = lambda prompt, url, model="veo3_fast", aspect="9:16", progress=None, timeout=0: ("task1", fake_video(prompt))
@@ -270,6 +270,34 @@ def test_dubvoice_voice_changer(monkeypatch):
     monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
     dubvoice._poll_cache.clear()
     assert dubvoice.voice_change("https://a/x.mp3", "v9") == b"AUDIO"
+
+
+def test_voice_change_falls_back_across_call_styles(monkeypatch, tmp_path):
+    import importlib
+    importlib.reload(dubvoice)
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+    aud = tmp_path / "a.mp3"; aud.write_bytes(b"ID3xx")
+    calls = []
+
+    class R:
+        def __init__(self, code, body=b"", ctype="application/json", j=None):
+            self.status_code, self.content, self.text, self._j = code, body, "err", j
+            self.headers = {"content-type": ctype}
+        def json(self): return self._j or {}
+
+    def fake(method, url, **kw):
+        calls.append((method, url, "X-API-Key" in (kw.get("headers") or {})))
+        if "/api/v1/voice-changer" in url:
+            return R(401, j={"error": "Unauthorized"})
+        if url.endswith("/api/voice-changer"):
+            return R(200, b"ID3AUDIO", "audio/mpeg")
+        raise AssertionError(url)
+
+    monkeypatch.setattr(dubvoice, "request", fake)
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    assert dubvoice.voice_change("https://a/x.mp3", "v9", audio_path=aud) == b"ID3AUDIO"
+    assert any(c[2] for c in calls if "v1" in c[1]), "debe reintentar con X-API-Key"
+    assert dubvoice._voice_mode == ["upload-bearer"]
 
 
 def test_dubvoice_retries_on_429(monkeypatch):

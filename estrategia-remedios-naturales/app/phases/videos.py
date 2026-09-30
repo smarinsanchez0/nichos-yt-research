@@ -74,7 +74,11 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
                 if st.get("voice_provider") == "elevenlabs":
                     new = eleven.speech_to_speech(aud, st["voice_id"])
                 else:
-                    new = dubvoice.voice_change(kie.upload_file(aud, "audio/mpeg"), st["voice_id"])
+                    try:
+                        url = kie.upload_file(aud, "audio/mpeg")
+                    except Exception:  # noqa: BLE001  - sin URL publica se usa la subida directa
+                        url = None
+                    new = dubvoice.voice_change(url, st["voice_id"], audio_path=aud)
                 mp3 = store.path(pid, "videos", f"s{si:02d}_c{ci}_voice.mp3")
                 mp3.write_bytes(new)
                 final = store.path(pid, "videos", f"s{si:02d}_c{ci}.mp4")
