@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from app import config, media  # noqa: E402
-from app.services import claude, dubvoice, eleven, gemini, kie, stt  # noqa: E402
+from app.services import claude, dubvoice, eleven, gemini, google_veo, kie, stt  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="ern-media-"))
 SCRIPT = ("Did you know that ginger tea can calm your stomach in minutes. "
@@ -103,6 +103,7 @@ def client():
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": _jpg()
     kie.upload_image = lambda path: "https://example.com/x.jpg"
     dubvoice.veo = lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None, cancel=None: ("task1", fake_video(prompt))
+    google_veo.veo = lambda prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None, timeout=0, cancel=None: ("g", fake_video(prompt))
     from app.main import app
     return TestClient(app)
 
@@ -512,6 +513,7 @@ def test_supervisor_retries_failures_audits_and_finishes(client, monkeypatch):
         return {"analysis": "ok", "actions": acts}
 
     monkeypatch.setattr(dubvoice, "veo", fake_veo)
+    monkeypatch.setattr(google_veo, "veo", lambda prompt, image_path, **k: fake_veo(prompt, image_path))
     monkeypatch.setattr(claude, "ask_json", fake_sup)
     monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
         "text": dlg, "words": [{"text": w, "start": i * .5, "end": i * .5 + .4} for i, w in enumerate(dlg.split())]})
@@ -569,6 +571,7 @@ def test_supervisor_gives_up_after_max_attempts(client, monkeypatch):
     def always_fail(prompt, image_path, **k): raise RuntimeError("content policy")
 
     monkeypatch.setattr(dubvoice, "veo", always_fail)
+    monkeypatch.setattr(google_veo, "veo", always_fail)
     monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
     with pytest.raises(RuntimeError, match="sin resolver"):
         supervisor.start(pid, lambda msg=None, progress=None: None)
@@ -622,3 +625,26 @@ def test_dubvoice_retries_connection_reset(monkeypatch, tmp_path):
     monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
     dubvoice._poll_cache.clear()
     assert dubvoice.veo("p", img)[1] == b"V" and n["post"] == 3
+
+
+def test_supervisor_retry_goes_to_google_after_dubvoice_failure(client, monkeypatch):
+    """Primer intento en DubVoice; si falla, el reintento va a Veo directo de Google (mas estable)."""
+    from app.phases import supervisor
+    from app import store
+    pid = _setup_sup_project(client, n=1)
+    used = []
+
+    def dub_fail(prompt, image_path, **k):
+        used.append("dubvoice"); raise RuntimeError("DubVoice (video) no termino en 10 min")
+
+    def google_ok(prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None, timeout=0, cancel=None):
+        used.append("google"); return "g", fake_video(prompt)
+
+    monkeypatch.setattr(dubvoice, "veo", dub_fail)
+    monkeypatch.setattr(google_veo, "veo", google_ok)
+    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))   # autopiloto
+    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
+        "text": "ginger tea can calm your stomach", "words": []})
+    supervisor.start(pid, lambda msg=None, progress=None: None)
+    c = store.get(pid)["scenes"][0]["clips"][0]
+    assert used[:2] == ["dubvoice", "google"] and c["provider_used"] == "google" and c["verified"]

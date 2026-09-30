@@ -30,6 +30,10 @@ La barra superior muestra cuáles detectó (nunca se muestran completas).
 
 Salida: `data/projects/<id>/final/reel_final.mp4` (1080×1920).
 
+## Respaldo automático de video (Google Veo)
+El primer intento de cada clip va a DubVoice. Si falla o pasa de 7 min, el reintento va directo a **Veo 3.1 de Google** con tu key de
+Google AI Studio (`veo-3.1-fast-generate-preview`, 4/6/8 s, con audio). Se puede desactivar con `video_fallback=false`.
+
 ## Skill `/remedios` (modo automático, sin pantalla)
 Video en inglés + foto del avatar -> Reel final editado, con auditoría en cada fase y una sola voz de IA.
 ```bash

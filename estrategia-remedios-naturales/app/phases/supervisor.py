@@ -10,15 +10,17 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import media, store
+from ..config import get_key
 from ..services import claude, dubvoice, stt
 from . import editing, videos
 from .common import abs_path
 
 MAX_ATTEMPTS = 3            # intentos por clip
-STALL_SECONDS = 12 * 60     # cancelacion dura de un clip atascado
+STALL_SECONDS = 7 * 60      # cancelacion dura de un clip atascado (Veo normal: 1-4 min)
 DEADLINE_SECONDS = 75 * 60  # tiempo maximo de toda la corrida
 MAX_TURNS = 90
-MODELS = {"veo-3.1-fast": "7.500 cr, 8 s", "veo-3.1-lite": "9.100 cr, 8 s", "veo-3.1": "17.000 cr, 8 s, alta calidad",
+MODELS = {"google (provider)": "Veo 3.1 directo con la key de Google: mas estable, ~0.4-0.8 USD por clip; usalo tras un fallo/atasco en DubVoice",
+          "veo-3.1-fast": "7.500 cr, 8 s", "veo-3.1-lite": "9.100 cr, 8 s", "veo-3.1": "17.000 cr, 8 s, alta calidad",
           "omniflash": "4.688–9.375 cr segun 4/6/8/10 s"}
 
 _active: dict[str, "Supervisor"] = {}
@@ -41,7 +43,8 @@ Tras 3 intentos fallidos usa give_up con la razon. Nunca cambies el dialogo salv
 Responde UNICAMENTE con JSON: {"analysis": "1-3 frases en español sobre lo que ves y decides", "actions": [ ... ]}
 Acciones (lista, se ejecutan en orden):
   {"do":"accept","scene":N,"clip":K}
-  {"do":"retry","scene":N,"clip":K,"reason":"...","prompt":"(opcional) nuevo prompt de video completo","model":"(opcional)","duration":(opcional segundos)}
+  {"do":"retry","scene":N,"clip":K,"reason":"...","prompt":"(opcional) nuevo prompt de video completo","model":"(opcional)","duration":(opcional segundos),"provider":"(opcional) dubvoice|google"}
+  Regla del motor: el primer intento va a DubVoice; los reintentos tras fallo o atasco van automaticamente a Google (si hay key). Puedes forzar el proveedor.
   {"do":"cancel","scene":N,"clip":K}                 (corta un clip atascado; luego usa retry)
   {"do":"retry_voice","scene":N,"clip":K}            (solo repite el cambio de voz si el aviso lo pide)
   {"do":"give_up","scene":N,"clip":K,"reason":"..."}
@@ -93,7 +96,8 @@ class Supervisor:
         self.started[key] = time.time()
         self.state[key] = "running"
         model = overrides.get("model") or store.get(self.pid)["settings"]["dubvoice_video_model"]
-        cost = dubvoice.credits_for(model, overrides.get("duration") or self._clip(key).get("target") or 8)
+        cost = 12000 if overrides.get("provider") == "google" else dubvoice.credits_for(
+            model, overrides.get("duration") or self._clip(key).get("target") or 8)
         self.spent += cost
         try:
             videos.render_clip(self.pid, si, ci, prog=lambda m: self.notes.__setitem__(key, m), cancel=cancel, overrides=overrides)
@@ -108,12 +112,22 @@ class Supervisor:
                 self.events.put((key, "failed", str(e)[:400]))
 
     def launch(self, key, overrides=None):
+        overrides = dict(overrides or {})
+        if not overrides.get("provider"):       # politica: reintento => Google (respaldo estable) si esta disponible
+            st = store.get(self.pid)["settings"]
+            if self.attempts.get(key, 0) >= 1 and st.get("video_fallback", True) and get_key("google"):
+                overrides["provider"] = "google"
+        if overrides.get("provider") == "google" and not get_key("google"):
+            overrides.pop("provider")
         if self.attempts.get(key, 0) >= MAX_ATTEMPTS:
             return f"{self.clip_label(key)}: ya uso {MAX_ATTEMPTS} intentos"
-        model = (overrides or {}).get("model")
+        model = overrides.get("model")
+        if overrides.get("provider") == "google":
+            model = None            # el modelo de DubVoice no aplica a Google
+            overrides.pop("model", None)
         if model and model not in MODELS:
             return f"modelo desconocido {model}"
-        est = dubvoice.credits_for(model or store.get(self.pid)["settings"]["dubvoice_video_model"], 8)
+        est = 12000 if overrides.get("provider") == "google" else dubvoice.credits_for(model or store.get(self.pid)["settings"]["dubvoice_video_model"], 8)
         if self.spent + est > self.budget:
             self.state[key] = "gave_up"
             return f"presupuesto agotado ({self.spent}/{self.budget} creditos)"
@@ -122,7 +136,7 @@ class Supervisor:
             q["scenes"][key[0]]["clips"][key[1]]["attempts"] = self.attempts[key]
         self.gen[key] = self.gen.get(key, 0) + 1
         self.state[key] = "queued"
-        self.pool.submit(self._work, key, overrides or {}, self.gen[key])
+        self.pool.submit(self._work, key, overrides, self.gen[key])
         return None
 
     def _clip(self, key) -> dict:
@@ -235,7 +249,9 @@ class Supervisor:
                     self.pending_review.discard(key)
                     self.log(f"✅ Aceptado {self.clip_label(key)}")
                 elif do == "retry":
-                    ov = {k: a[k] for k in ("prompt", "model", "duration") if a.get(k)}
+                    ov = {k: a[k] for k in ("prompt", "model", "duration", "provider") if a.get(k)}
+                    if ov.get("provider") not in (None, "dubvoice", "google"):
+                        ov.pop("provider")
                     if "duration" in ov:
                         try:
                             ov["duration"] = float(ov["duration"])

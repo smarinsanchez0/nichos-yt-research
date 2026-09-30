@@ -112,7 +112,7 @@ VOICES = [
 
 def install() -> None:
     """Sustituye los servicios externos por versiones simuladas."""
-    from .services import claude, dubvoice, eleven, gemini, kie, stt
+    from .services import claude, dubvoice, eleven, gemini, google_veo, kie, stt
     for k in ("ELEVENLABS_API_KEY", "KIE_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "DUBVOICE_API_KEY"):
         os.environ[k] = "demo"
     claude.ask_json = fake_ask_json
@@ -124,5 +124,7 @@ def install() -> None:
     kie.upload_image = lambda path: "https://example.com/x.jpg"
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": jpg()
     dubvoice.image = lambda prompt, refs, model="nano-banana-2", aspect="9:16", progress=None: jpg()
+    google_veo.veo = (lambda prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None,
+                      timeout=0, cancel=None: ("google-task", fake_video(prompt)))
     dubvoice.veo = (lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None,
                     timeout=0, duration=None, cancel=None: ("demo-task", fake_video(prompt)))

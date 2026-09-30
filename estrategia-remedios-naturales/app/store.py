@@ -20,7 +20,9 @@ DEFAULT_SETTINGS = {
     "image_model": "gemini-2.5-flash-image",  # Nano Banana
     "kie_image_model": "google/nano-banana-edit",
     "video_model": "veo3_fast",
-    "video_provider": "dubvoice",           # DubVoice es el proveedor oficial de video
+    "video_provider": "dubvoice",           # DubVoice es el proveedor principal de video
+    "video_fallback": True,                 # reintentos tras fallo/atasco -> Veo directo con la key de Google
+    "google_video_model": "veo-3.1-fast-generate-preview",
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,
     "scene_ref_mode": "guide",              # guide (metodo de la guia, encadenado) | swap | blur | none | full

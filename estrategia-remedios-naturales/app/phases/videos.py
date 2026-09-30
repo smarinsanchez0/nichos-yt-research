@@ -4,7 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import media, store
-from ..services import dubvoice, eleven, kie
+from ..services import dubvoice, eleven, google_veo, kie
 from .common import abs_path
 
 
@@ -81,7 +81,8 @@ def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: d
     clip = p["scenes"][si]["clips"][ci]
     if not (p["scenes"][si].get("image") or {}).get("approved"):
         raise RuntimeError(f"La imagen de la escena {si + 1} no esta aprobada.")
-    model = ov.get("model") or st["dubvoice_video_model"]
+    provider = ov.get("provider") or "dubvoice"
+    model = ov.get("model") or (st.get("google_video_model") or google_veo.DEFAULT_MODEL if provider == "google" else st["dubvoice_video_model"])
     duration = ov.get("duration") or clip.get("target")
     prompt = ov.get("prompt") or clip["video_prompt"]
     with store.edit(pid) as q:
@@ -91,8 +92,11 @@ def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: d
             c["video_prompt"] = ov["prompt"]
     try:
         pg = (lambda m: prog(m)) if prog else None
-        task, data = dubvoice.veo(prompt, abs_path(pid, p["scenes"][si]["image"]["file"]), model=model, progress=pg,
-                                  duration=duration, cancel=cancel)
+        img = abs_path(pid, p["scenes"][si]["image"]["file"])
+        if provider == "google":
+            task, data = google_veo.veo(prompt, img, model=model, progress=pg, duration=duration, cancel=cancel)
+        else:
+            task, data = dubvoice.veo(prompt, img, model=model, progress=pg, duration=duration, cancel=cancel)
         raw = store.path(pid, "videos", f"s{si:02d}_c{ci}_raw.mp4")
         raw.write_bytes(data)
         final, warning = _unify(pid, si, ci, raw, st, clip)
@@ -100,7 +104,8 @@ def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: d
         with store.edit(pid) as q:
             c = q["scenes"][si]["clips"][ci]
             c.update(status="done", file=store.rel(pid, final), raw=store.rel(pid, raw), task_id=task, model_used=model,
-                     asked_seconds=dubvoice.tier_for(duration or 8, model),
+                     provider_used=provider,
+                     asked_seconds=(google_veo.pick_duration(duration) if provider == "google" else dubvoice.tier_for(duration or 8, model)),
                      duration=info["duration"], stale=False, warning=warning, error=None)
     except Exception as e:  # noqa: BLE001
         with store.edit(pid) as q:
