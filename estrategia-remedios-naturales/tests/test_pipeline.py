@@ -256,3 +256,24 @@ def test_dubvoice_voice_changer(monkeypatch):
     monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
     dubvoice._poll_cache.clear()
     assert dubvoice.voice_change("https://a/x.mp3", "v9") == b"AUDIO"
+
+
+def test_dubvoice_retries_on_429(monkeypatch):
+    import importlib
+    importlib.reload(dubvoice)
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+    n = {"i": 0}
+
+    class R:
+        def __init__(self, code, j=None): self.status_code, self._j, self.text, self.headers = code, j or {}, "x", {}
+        def json(self): return self._j
+
+    def fake(method, url, **kw):
+        if method == "POST":
+            n["i"] += 1
+            return R(429) if n["i"] < 3 else R(200, {"image_url": "https://x/i.png", "status": "completed"})
+
+    monkeypatch.setattr(dubvoice, "request", fake)
+    monkeypatch.setattr(dubvoice, "download", lambda u: b"IMG")
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    assert dubvoice.image("p", []) == b"IMG" and n["i"] == 3

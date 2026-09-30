@@ -96,7 +96,8 @@ def generate_many(pid: str, prog, indices: list[int]) -> None:
         done[0] += 1
         prog(f"Imagenes generadas {done[0]}/{total}", done[0] / total)
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    workers = 2 if store.get(pid)["settings"]["image_provider"] == "dubvoice" else 3   # DubVoice: max 3 en vuelo
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(one, indices))
     if errors:
         raise RuntimeError(" | ".join(errors)[:900])

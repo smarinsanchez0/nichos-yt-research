@@ -73,6 +73,20 @@ def _urls(d: dict) -> list[str]:
     return []
 
 
+def _post(service: str, path: str, body: dict):
+    """POST con espera automatica cuando DubVoice limita (429: max 3 en paralelo / 10 por minuto)."""
+    for attempt in range(30):
+        r = request("POST", f"{BASE}{path}", json=body, headers=_h(), timeout=600)
+        if r.status_code != 429:
+            return r
+        try:
+            wait = float(r.headers.get("Retry-After") or 0)
+        except ValueError:
+            wait = 0
+        time.sleep(max(wait, 8))
+    return r
+
+
 def _check(service: str, r):
     if r.status_code == 402:
         raise RuntimeError(f"{service}: creditos insuficientes en DubVoice. {r.text[:200]}")
@@ -104,8 +118,7 @@ def image(prompt: str, refs: list[Path], model: str = "nano-banana-2", aspect: s
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect}
     if refs:
         body["image_input"] = [data_uri(p) for p in refs][:4]
-    r = request("POST", f"{BASE}/api/image-generate", json=body, headers=_h(), timeout=600)
-    d = _check("DubVoice (imagen)", r)
+    d = _check("DubVoice (imagen)", _post("DubVoice (imagen)", "/api/image-generate", body))
     urls = _urls(d)
     if not urls or _status(d) in {"pending", "processing", "queued"}:
         tid = _task_id(d)
@@ -122,8 +135,7 @@ _poll_cache: dict[str, tuple[str, str]] = {}
 
 def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[tuple[str, str]],
                      timeout: float, interval: float, progress=None) -> tuple[str, list[str]]:
-    r = request("POST", f"{BASE}{path}", json=body, headers=_h(), timeout=600)
-    d = _check(service, r)
+    d = _check(service, _post(service, path, body))
     tid = _task_id(d)
     urls = _urls(d)
     if urls and _status(d) not in {"pending", "processing", "queued"}:
