@@ -72,6 +72,7 @@ class Supervisor:
         est = videos.estimate(p)
         self.budget = int(max(est["total_credits"], 1) * 2.2) + 20000
         self.claude_fail = 0
+        self.google_disabled = False
         self.audited: dict = {}
         self.gen: dict[tuple, int] = {}
         self.review_turns: dict[tuple, int] = {}
@@ -106,6 +107,12 @@ class Supervisor:
                 self.events.put((key, "done", ""))
         except Exception as e:  # noqa: BLE001
             self.spent -= cost                      # DubVoice reembolsa los fallos
+            msg = str(e)
+            if overrides.get("provider") == "google" and any(t in msg for t in ("429", "RESOURCE_EXHAUSTED", "quota", "billing", "403")):
+                if not self.google_disabled:
+                    self.google_disabled = True
+                    self.log("⚠️ Google Veo no tiene cuota/facturacion activa: lo desactivo en esta corrida y sigo con los modelos de DubVoice.")
+                self.attempts[key] = max(self.attempts.get(key, 1) - 1, 0)     # ese intento no cuenta: nunca corrio
             if self.gen.get(key) == gen:            # un intento cancelado/antiguo no pisa al nuevo
                 self.state[key] = "failed"
                 self.last_error[key] = str(e)[:400]
@@ -113,12 +120,14 @@ class Supervisor:
 
     def launch(self, key, overrides=None):
         overrides = dict(overrides or {})
-        if not overrides.get("provider"):       # politica: reintento => Google (respaldo estable) si esta disponible
-            st = store.get(self.pid)["settings"]
-            if self.attempts.get(key, 0) >= 1 and st.get("video_fallback", True) and get_key("google"):
-                overrides["provider"] = "google"
-        if overrides.get("provider") == "google" and not get_key("google"):
+        st = store.get(self.pid)["settings"]
+        if overrides.get("provider") == "google" and (self.google_disabled or not get_key("google")):
             overrides.pop("provider")
+        if not overrides.get("provider") and self.attempts.get(key, 0) >= 1:
+            if st.get("video_fallback", True) and get_key("google") and not self.google_disabled:
+                overrides["provider"] = "google"          # respaldo estable (si tiene cuota/facturacion)
+            elif not overrides.get("model"):              # sin Google: escalera de modelos de DubVoice
+                overrides["model"] = ("veo-3.1-lite", "omniflash", "meta")[min(self.attempts.get(key, 1) - 1, 2)]
         if self.attempts.get(key, 0) >= MAX_ATTEMPTS:
             return f"{self.clip_label(key)}: ya uso {MAX_ATTEMPTS} intentos"
         model = overrides.get("model")
@@ -372,6 +381,17 @@ class Supervisor:
             unresolved = [k for k in self.keys if self.state.get(k) not in ("accepted", "gave_up")]
             if not unresolved:
                 break
+        # Salida garantizada: lo que ningun proveedor entrego se completa con locucion (misma voz) sobre la imagen aprobada
+        pend = [k for k in self.keys if self.state.get(k) in ("gave_up", "failed") and not self.stop_flag.is_set()]
+        if pend and store.get(self.pid)["settings"].get("salvage_still", True):
+            self.log(f"🛟 {len(pend)} clip(s) sin video de ningun proveedor: los completo con locucion sobre la imagen aprobada.")
+            for k in pend:
+                try:
+                    videos.make_still_clip(self.pid, k[0], k[1])
+                    self.state[k] = "accepted"
+                    self.log(f"🖼️ {self.clip_label(k)} completado con locucion sobre imagen fija")
+                except Exception as e:  # noqa: BLE001
+                    self.log(f"⚠️ No pude completar {self.clip_label(k)} con locucion: {str(e)[:160]}")
         ok = sum(1 for k in self.keys if self.state.get(k) == "accepted")
         bad = [self.clip_label(k) + (f" [{self.last_error[k][:110]}]" if self.last_error.get(k) else "")
                for k in self.keys if self.state.get(k) != "accepted"]

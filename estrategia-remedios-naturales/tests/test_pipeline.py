@@ -562,8 +562,8 @@ def test_supervisor_autopilot_when_claude_is_down(client, monkeypatch):
     assert all(c["status"] == "done" and c["verified"] for c in clips)
 
 
-def test_supervisor_gives_up_after_max_attempts(client, monkeypatch):
-    import pytest
+def test_supervisor_salvages_with_voiceover_when_all_providers_fail(client, monkeypatch):
+    """Si ningun proveedor entrega el clip, se completa con locucion sobre la imagen aprobada (salida garantizada)."""
     from app.phases import supervisor
     from app import store
     pid = _setup_sup_project(client, n=1)
@@ -572,10 +572,45 @@ def test_supervisor_gives_up_after_max_attempts(client, monkeypatch):
 
     monkeypatch.setattr(dubvoice, "veo", always_fail)
     monkeypatch.setattr(google_veo, "veo", always_fail)
-    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
-    with pytest.raises(RuntimeError, match="sin resolver"):
-        supervisor.start(pid, lambda msg=None, progress=None: None)
-    assert store.get(pid)["scenes"][0]["clips"][0]["status"] == "error"
+    monkeypatch.setattr(dubvoice, "edge_tts", lambda text, voice="x": _mp3(4))
+    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_for_raise()))
+    supervisor.start(pid, lambda msg=None, progress=None: None)
+    c = store.get(pid)["scenes"][0]["clips"][0]
+    assert c["status"] == "done" and c["provider_used"] == "still" and "imagen fija" in c["warning"]
+    info = media.probe(Path(os.environ["ERN_DATA_DIR"]) / "projects" / pid / c["file"])
+    assert (info["width"], info["height"]) == (1080, 1920) and info["has_audio"] and info["duration"] > 2
+
+
+def _for_raise():
+    raise RuntimeError("down")
+
+
+def test_google_quota_error_disables_google_and_uses_dubvoice_model_ladder(client, monkeypatch):
+    from app.phases import supervisor
+    from app import store
+    pid = _setup_sup_project(client, n=1)
+    seen = []
+
+    def dub(prompt, image_path, model="veo-3.1-fast", **k):
+        seen.append(("dubvoice", model))
+        if len(seen) == 1:
+            raise RuntimeError("DubVoice (video) no termino en 10 min")
+        return "t", fake_video(prompt)
+
+    def goog(prompt, image_path, **k):
+        seen.append(("google", None))
+        raise RuntimeError("Google Veo respondio 429: RESOURCE_EXHAUSTED You exceeded your current quota")
+
+    monkeypatch.setattr(dubvoice, "veo", dub)
+    monkeypatch.setattr(google_veo, "veo", goog)
+    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_for_raise()))
+    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
+        "text": "ginger tea can calm your stomach", "words": []})
+    supervisor.start(pid, lambda msg=None, progress=None: None)
+    c = store.get(pid)["scenes"][0]["clips"][0]
+    assert [x[0] for x in seen] == ["dubvoice", "google", "dubvoice"] and seen[2][1] == "veo-3.1-lite"
+    assert c["status"] == "done" and c["provider_used"] == "dubvoice" and c["attempts"] <= 2
+
 
 
 def test_cli_demo_end_to_end_delivers_final_video(tmp_path):

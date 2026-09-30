@@ -302,3 +302,20 @@ def voice_change(audio_url: str | None, voice_id: str, progress=None, audio_path
         except Exception as e:  # noqa: BLE001
             errs.append(f"{name}: {str(e)[:160]}")
     raise RuntimeError(" || ".join(errs))
+
+
+# ------------------------------------------------------------------ locucion (TTS) para clips de respaldo
+def tts(text: str, voice_id: str, language: str = "auto", progress=None) -> bytes:
+    """Texto -> audio con una voz del catalogo (1 credito por caracter). Endpoint documentado: POST /api/v1/tts + sondeo."""
+    body = {"text": text, "voice_id": voice_id, "language": language, "model_id": "eleven_multilingual_v2"}
+    _, urls = _submit_and_wait("DubVoice (locucion)", "/api/v1/tts", body, [("/api/v1/tts", "task_id")], 300, 3, progress,
+                               post_timeout=60)
+    return download(urls[0])
+
+
+def edge_tts(text: str, voice: str = "es-MX-JorgeNeural") -> bytes:
+    """Voz gratuita de Edge: devuelve el MP3 directamente (sin sondeo)."""
+    r = request("POST", f"{BASE}/api/edge-tts", json={"text": text, "voice": voice}, headers=_h(), timeout=120)
+    if r.status_code != 200:
+        raise fail("DubVoice (edge-tts)", r)
+    return r.content

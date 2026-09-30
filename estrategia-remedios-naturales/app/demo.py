@@ -124,6 +124,8 @@ def install() -> None:
     kie.upload_image = lambda path: "https://example.com/x.jpg"
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": jpg()
     dubvoice.image = lambda prompt, refs, model="nano-banana-2", aspect="9:16", progress=None: jpg()
+    dubvoice.tts = lambda text, voice_id, language="auto", progress=None: mp3(4)
+    dubvoice.edge_tts = lambda text, voice="x": mp3(4)
     google_veo.veo = (lambda prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None,
                       timeout=0, cancel=None: ("google-task", fake_video(prompt)))
     dubvoice.veo = (lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None,

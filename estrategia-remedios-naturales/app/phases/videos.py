@@ -113,6 +113,48 @@ def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: d
         raise
 
 
+def make_still_clip(pid: str, si: int, ci: int) -> None:
+    """Salida garantizada: locucion (misma voz elegida) sobre la imagen aprobada con un zoom suave. No depende de ningun proveedor de video."""
+    p = store.get(pid)
+    st = p["settings"]
+    scene = p["scenes"][si]
+    c = scene["clips"][ci]
+    lang = st.get("output_language", "es")
+    text = (c.get("dialogue") or "").strip()
+    out = store.path(pid, "videos", f"s{si:02d}_c{ci}_still.mp4")
+    img = abs_path(pid, scene["image"]["file"])
+    secs = float(c.get("target") or 6)
+    audio = None
+    if text:
+        if st.get("voice_id"):
+            data = dubvoice.tts(text, st["voice_id"], lang)
+        else:
+            data = dubvoice.edge_tts(text, "es-MX-JorgeNeural" if lang == "es" else "en-US-GuyNeural")
+        audio = store.path(pid, "videos", f"s{si:02d}_c{ci}_tts.mp3")
+        audio.write_bytes(data)
+        secs = max(media.probe(audio)["duration"] + 0.3, 1.5)
+    frames = int(secs * 30)
+    vf = ("scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
+          f"zoompan=z='min(zoom+0.0007,1.14)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30,format=yuv420p")
+    args = ["-i", str(img)]
+    args += ["-i", str(audio)] if audio else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+    args += ["-vf", vf, "-t", f"{secs:.2f}", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-shortest", str(out)]
+    media.run(args)
+    with store.edit(pid) as q:
+        q["scenes"][si]["clips"][ci].update(
+            status="done", file=store.rel(pid, out), raw=store.rel(pid, out), duration=media.probe(out)["duration"], stale=False,
+            provider_used="still", verified=True, error=None,
+            warning="Locucion sobre imagen fija (no se pudo generar el video de este clip). Regeneralo cuando haya proveedor disponible.")
+
+
+def salvage_all(pid: str, prog) -> None:
+    p = store.get(pid)
+    todo = [(s["idx"], c["idx"]) for s in p["scenes"] for c in s["clips"] if c.get("status") != "done" or c.get("stale")]
+    for n, (si, ci) in enumerate(todo):
+        prog(f"Locucion sobre imagen: escena {si + 1} clip {ci + 1} ({n + 1}/{len(todo)})", n / max(len(todo), 1))
+        make_still_clip(pid, si, ci)
+
+
 def render_many(pid: str, prog, pairs: list[tuple[int, int]]) -> None:
     done = [0]
     errors: list[str] = []

@@ -289,6 +289,13 @@ def gen_videos(pid: str, body: dict = Body(default={})):
     return _start(pid, "videos", lambda prog: videos.render_many(pid, prog, pairs))
 
 
+@app.post("/api/projects/{pid}/videos/salvage")
+def videos_salvage(pid: str):
+    p = P(pid)
+    _need(bool(p["scenes"]) and all(s.get("clips") for s in p["scenes"]), "Completa la Fase 4 primero")
+    return _start(pid, "salvage", lambda prog: videos.salvage_all(pid, prog))
+
+
 @app.post("/api/projects/{pid}/supervisor/start")
 def supervisor_start(pid: str):
     p = P(pid)
