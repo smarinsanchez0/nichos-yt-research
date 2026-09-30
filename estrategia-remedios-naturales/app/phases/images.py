@@ -42,6 +42,38 @@ def _action(s: dict) -> str:
     return (s.get("action") or r.get("person") or "").strip()
 
 
+def _prev_image(p: dict, idx: int):
+    """Imagen generada del clip anterior (la mas cercana hacia atras que exista)."""
+    for j in range(idx - 1, -1, -1):
+        if (p["scenes"][j].get("image") or {}).get("file"):
+            return p["scenes"][j]
+    return None
+
+
+def _compose_guide(p: dict, s: dict, notes: str):
+    """Metodo de la guia: clip 1 = captura + avatar; siguientes = Imagen A (captura, accion) + Imagen B (imagen anterior generada)."""
+    pid = p["id"]
+    prev = _prev_image(p, s["idx"])
+    frame, avatar = abs_path(pid, s["frame"]), abs_path(pid, p["avatar"]["file"])
+    tail = ""
+    if notes:
+        tail += f"\nDirector's changes (apply them): {notes}"
+    if p["settings"].get("global_notes"):
+        tail += f"\nGlobal style notes: {p['settings']['global_notes']}"
+    if prev is None:       # primer clip: captura + avatar
+        refs = [("Reference image - screenshot of the scene to recreate (use it for framing, composition, background, props and the "
+                 "action/pose; its person is NOT the character):", frame),
+                ("Character image - the avatar (appearance, face and clothing exactly as shown):", avatar)]
+        prompt = s.get("image_prompt", "") + tail
+    else:
+        refs = [("Image A - screenshot of this clip (the specific action, pose and props to recreate; its person is NOT the character):", frame),
+                ("Image B - generated image of the previous clip (character appearance, clothing and environment continuity):",
+                 abs_path(pid, prev["image"]["file"])),
+                ("Image C - the original avatar photo (the face and clothing must also match it):", avatar)]
+        prompt = s.get("image_prompt", "") + " Image C is the original avatar photo: the face and clothing must also match it." + tail
+    return prompt, refs
+
+
 def _compose_swap(p: dict, s: dict, notes: str, anchor_idx: int | None, use_anchor: bool):
     """Edicion del frame original: se conserva la pose/manos/objetos EXACTOS y se reemplaza a la persona por el avatar."""
     pid = p["id"]
@@ -80,7 +112,9 @@ def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
                  use_anchor: bool = True) -> tuple[str, list[tuple[str, object]]]:
     pid = p["id"]
     prof = (p["avatar"] or {}).get("profile") or {}
-    mode = p["settings"].get("scene_ref_mode", "swap")
+    mode = p["settings"].get("scene_ref_mode", "guide")
+    if mode == "guide":
+        return _compose_guide(p, s, notes)
     if mode == "swap":
         return _compose_swap(p, s, notes, anchor_idx, use_anchor)
     refs = [("IMAGE 1 - THE AVATAR. This is the ONLY person allowed in the result: same face, hair, skin, age, body AND the same clothes/accessories:",
@@ -237,6 +271,23 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx:
             c["stale"] = True
 
 
+def _generate_chain(pid: str, prog, indices: list[int]) -> None:
+    """Metodo de la guia: en orden, cada imagen usa la anterior como referencia de personaje y ambiente.
+    La primera (start frame) se genera sola: hay que revisarla/aprobarla antes de seguir con las demas."""
+    p = store.get(pid)
+    first_needs_review = indices[0] == 0 and not (p["scenes"][0].get("image") or {}).get("approved")
+    todo = [0] if first_needs_review else indices
+    for n, i in enumerate(todo):
+        prog(f"Escena {i + 1}: generando ({n + 1}/{len(todo)}) — cada imagen usa la anterior como referencia…", n / len(todo))
+        try:
+            generate(pid, i)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"Escena {i + 1}: {e} — las siguientes dependen de esta. Corrige y pulsa 'Generar imagenes faltantes'.")
+    if first_needs_review and len(indices) > 1:
+        prog("ℹ️ Start frame listo. Revisa la imagen de la escena 1 (retócala si hace falta) y APRUÉBALA; después pulsa "
+             "'Generar imágenes faltantes' para crear las demás.", 1.0)
+
+
 def generate_many(pid: str, prog, indices: list[int]) -> None:
     """Genera las imagenes con consistencia: si no hay imagenes aprobadas, la primera se genera sola y las demas la usan
     como referencia de apariencia. Cada imagen tiene reintentos, tiempo limite y respaldo; un fallo no frena a las demas."""
@@ -244,6 +295,8 @@ def generate_many(pid: str, prog, indices: list[int]) -> None:
     done = [0]
     errors: list[str] = []
     p = store.get(pid)
+    if p["settings"].get("scene_ref_mode", "guide") == "guide":
+        return _generate_chain(pid, prog, sorted(indices))
     has_approved = any((s.get("image") or {}).get("approved") for s in p["scenes"] if s["idx"] not in indices)
     anchor = [None]
 

@@ -23,7 +23,7 @@ DEFAULT_SETTINGS = {
     "video_provider": "kie",                # kie | dubvoice
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,
-    "scene_ref_mode": "swap",               # swap (reemplaza a la persona conservando pose) | blur | none | full
+    "scene_ref_mode": "guide",              # guide (metodo de la guia, encadenado) | swap | blur | none | full
     "image_qa": True,                       # Claude revisa cada imagen y corrige hasta 2 veces
     "output_language": "es",                # idioma del video final: es | en
     "dubvoice_video_model": "veo-3.1-fast",
@@ -47,9 +47,10 @@ DEFAULT_SETTINGS = {
 def _migrate(p: dict) -> None:
     for k, v in DEFAULT_SETTINGS.items():
         p["settings"].setdefault(k, v)
-    if p["settings"].get("_v", 0) < 2:          # v2: modo "swap" por defecto (conserva la pose del frame)
-        p["settings"]["scene_ref_mode"] = "swap"
-        p["settings"]["_v"] = 2
+    if p["settings"].get("_v", 0) < 3:          # v3: metodo de la guia (encadenado) + Nano Banana Pro
+        p["settings"]["scene_ref_mode"] = "guide"
+        p["settings"]["dubvoice_image_model"] = "nano-banana-pro"
+        p["settings"]["_v"] = 3
 
 
 def _lock(pid: str) -> threading.RLock:

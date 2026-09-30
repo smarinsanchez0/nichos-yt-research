@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .. import media, store
 from ..services import claude, stt
+from . import metaprompts as mp
 from .common import abs_path, assign_words, make_segments
 
 SYSTEM_BASE = """Trabajas en un equipo que replica videos virales (Instagram Reels, 9:16) que venden un libro digital
@@ -124,48 +126,46 @@ def _step_scenes(pid, prog):
         q["final"] = None
 
 
-PROMPTS_SYS = SYSTEM_BASE + """
-Escribes prompts para Nano Banana (modelo de imagen de Google) que recrean una escena de un video usando una persona
-de referencia (el avatar). El avatar se entrega como imagen de referencia aparte, asi que NO describas su cara: di 'the
-person from the reference photo'. Describe con precision: tipo de plano y angulo, pose corporal, direccion de la mirada,
-expresion, posicion de manos y objetos, decorado con todos los detalles (cocina estadounidense, bandera, plantas, frascos...),
-iluminacion. REGLA CLAVE: la persona original sera reemplazada por el avatar, asi que NUNCA describas su ropa, cabello, edad,
-genero, joyas, lentes ni rasgos fisicos (ignora esos datos si aparecen en la lectura de la escena); escribe siempre 'the person from
-the reference photo, wearing their own outfit from the reference photo'.
-EL PROMPT DEBE ORDENAR LA ACCION: el campo "action" es lo mas importante. Es 1-2 frases en ingles que empiezan con un verbo y dicen
-EXACTAMENTE lo que hace el avatar en el frame: que hace cada mano y dedo, hacia donde mira, la expresion, la postura, y como interactua
-con los objetos o graficos (ej. 'Points with the right index finger at the translucent lungs graphic on the chest while looking down at
-it with a concerned expression'). Usa el genero del avatar. "image_prompt" debe EMPEZAR con esa accion y luego dar plano, decorado y luz. Estilo: fotografia 100% realista, natural, tipo contenido de iPhone/UGC, piel con textura real, sin aspecto de
-render ni de IA. Formato vertical 9:16. Maximo 140 palabras por prompt, en ingles."""
+def _meta_prompt_for(pid: str, p: dict, s: dict) -> dict:
+    """META-PROMPT 1 (primer clip) o 2 (siguientes): Claude mira la CAPTURA y escribe el prompt de imagen."""
+    first = s["idx"] == 0
+    meta, close = (mp.META1, mp.CLOSE_1) if first else (mp.META2, mp.CLOSE_2)
+    notes = p["settings"].get("global_notes") or ""
+    text = meta + (f"\nNotas del usuario para todas las escenas (respetalas): {notes}\n" if notes else "") + mp.JSON_OUT
+    content = [{"type": "text", "text": "Captura de referencia del clip:"}, claude.image_block(abs_path(pid, s["frame"]), max_side=900),
+               {"type": "text", "text": text}]
+    data = claude.ask_json(content, model=_model(p), max_tokens=1800)
+    return {"image_prompt": mp.ensure_close(data["image_prompt"], close), "action": (data.get("action") or "").strip()}
 
 
 def _step_prompts(pid, prog):
     p = store.get(pid)
     scenes = p["scenes"]
-    avatar = (p["avatar"] or {}).get("profile") or {}
-    notes = p["settings"].get("global_notes") or ""
-    B = 8
-    for a in range(0, len(scenes), B):
-        batch = scenes[a:a + B]
-        prog(f"Redactando prompts de imagen ({a + 1}-{a + len(batch)} de {len(scenes)})…", 0.1 + 0.85 * a / len(scenes))
-        items = [{"n": s["idx"] + 1, "read": s["read"], "dialogue_en": s["dialogue_en"]} for s in batch]
-        data = claude.ask_json(
-            f"Avatar: {avatar.get('description', '(sin descripcion)')} (genero: {avatar.get('gender', '?')})\nNotas globales del usuario: {notes or '-'}\n\n"
-            "Para cada escena devuelve "
-            '{"scenes":[{"n":<n>,"action":"...","image_prompt":"...","dialogue_es":"traduccion al español del dialogue_en de esa escena (vacio si no hay dialogo)"}]}\n\n'
-            + "ESCENAS:\n" + __import__("json").dumps(items, ensure_ascii=False),
-            system=PROMPTS_SYS, model=_model(p), max_tokens=6000)
-        by_n = {int(x["n"]): x for x in data["scenes"]}
-        with store.edit(pid) as q:
-            for s in batch:
-                x = by_n.get(s["idx"] + 1)
-                if not x:
-                    raise RuntimeError(f"Falto el prompt de la escena {s['idx'] + 1}; reintenta.")
-                q["scenes"][s["idx"]]["image_prompt"] = x["image_prompt"]
-                if not q["scenes"][s["idx"]].get("action_edited"):
-                    q["scenes"][s["idx"]]["action"] = x.get("action", "")
-                q["scenes"][s["idx"]]["dialogue_es"] = x.get("dialogue_es", "")
+    results: dict[int, dict] = {}
+    done = [0]
+
+    def one(s):
+        results[s["idx"]] = _meta_prompt_for(pid, p, s)
+        done[0] += 1
+        prog(f"Meta-prompts de imagen {done[0]}/{len(scenes)} (Claude mira cada captura)…", 0.05 + 0.75 * done[0] / len(scenes))
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        list(ex.map(one, scenes))
+    # traduccion informativa del dialogo de cada escena (lote de texto)
+    prog("Traduciendo el dialogo por escena…", 0.85)
+    items = [{"n": s["idx"] + 1, "dialogue_en": s["dialogue_en"]} for s in scenes if s["dialogue_en"]]
+    es_by: dict[int, str] = {}
+    if items:
+        data = claude.ask_json('Traduce al español natural cada dialogue_en. Devuelve {"scenes":[{"n":<n>,"dialogue_es":"..."}]}\n\n'
+                               + __import__("json").dumps(items, ensure_ascii=False), model=_model(p), max_tokens=6000)
+        es_by = {int(x["n"]): x.get("dialogue_es", "") for x in data["scenes"]}
     with store.edit(pid) as q:
+        for s in scenes:
+            sc = q["scenes"][s["idx"]]
+            sc["image_prompt"] = results[s["idx"]]["image_prompt"]
+            if not sc.get("action_edited"):
+                sc["action"] = results[s["idx"]]["action"]
+            sc["dialogue_es"] = es_by.get(s["idx"] + 1, "")
         q["analysis"]["points"]["prompts"] = True
 
 

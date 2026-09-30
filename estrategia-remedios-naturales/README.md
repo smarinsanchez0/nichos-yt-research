@@ -30,6 +30,13 @@ La barra superior muestra cuáles detectó (nunca se muestran completas).
 
 Salida: `data/projects/<id>/final/reel_final.mp4` (1080×1920).
 
+## Método de la guía (guia_creacion_video_IA)
+Los 3 meta-prompts están en `app/phases/metaprompts.py`: Claude mira la CAPTURA de cada clip y escribe el prompt.
+1. Clip 1 (start frame): Nano Banana Pro recibe captura + avatar. Se revisa/retoca/aprueba antes de seguir.
+2. Clips siguientes: Imagen A (captura = acción) + Imagen B (imagen anterior generada = personaje y ambiente) (+ Imagen C = foto del avatar).
+3. Veo 3: start frame + prompt con reglas fijas (iPhone, cámara estática, hiperrealista, sin música) + diálogo, terminando con
+   "El start frame proporcionado define la apariencia del personaje, su ropa y el ambiente. Continúa desde ahí."
+
 ## Probar sin gastar créditos
 `python tests/demo_server.py` (servicios simulados, puerto 8099) y `pytest -q` (las 6 fases de punta a punta).
 

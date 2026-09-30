@@ -6,6 +6,7 @@ import re
 
 from .. import store
 from ..services import claude
+from . import metaprompts as mp
 from .common import abs_path, assign_words
 
 MAX_SPEECH = {"en": 6.8, "es": 5.6}   # s de habla (en el original) por clip; Veo genera 8 s y el español dura ~20% mas
@@ -39,18 +40,7 @@ def chunk_words(words: list[dict], lang: str = "en") -> list[list[dict]]:
 
 
 def build_prompt(c: dict) -> str:
-    parts = [c.get("camera", "").strip(), c.get("action_en", "").strip()]
-    if c.get("dialogue"):
-        if c.get("lang") == "es":
-            parts.append(f'The person speaks directly to the camera in Spanish, with a {c.get("delivery") or "warm, trustworthy"} '
-                         f'neutral Latin American Spanish voice, and says in Spanish: "{c["dialogue"]}"')
-        else:
-            parts.append(f'The person speaks directly with a {c.get("delivery") or "warm, trustworthy"} American English voice and says: '
-                         f'"{c["dialogue"]}"')
-    else:
-        parts.append("The person does not speak in this shot; only natural ambient sound.")
-    parts.append(SUFFIX)
-    return " ".join(x for x in parts if x)
+    return mp.video_prompt(c)
 
 
 SYSTEM = """Eres director de video para Instagram Reels de venta (nicho remedios naturales, publico de EE.UU.).
@@ -98,16 +88,19 @@ def run(pid: str, prog) -> None:
         items = []
         for i in batch:
             s = scenes[i]
-            content.append({"type": "text", "text": f"Imagen inicial de la ESCENA {i + 1}:"})
-            content.append(claude.image_block(abs_path(pid, s["image"]["file"]), max_side=512))
+            content.append({"type": "text", "text": f"Captura ORIGINAL de la ESCENA {i + 1}:"})
+            content.append(claude.image_block(abs_path(pid, s["frame"]), max_side=640))
             items.append({"scene": i + 1, "original_scene": s["read"],
                           "clips": [{"clip": k + 1, "dialogue_en": c["dialogue_en"],
                                      "max_words_es": min(24, int(len(c["dialogue_en"].split()) * 1.2) + 1)} for k, c in enumerate(plan[i])]})
         content.append({"type": "text", "text": (
-            f"Voz/personaje: {json.dumps(profile.get('voice', {}), ensure_ascii=False)}. Notas globales: {p['settings'].get('global_notes') or '-'}\n"
+            "Aplica el META-PROMPT 3 (Veo 3) a CADA clip: analiza la captura y describe la accion exacta (manos, dedos, mirada, expresion), los "
+            "objetos/graficos con los que interactua y el encuadre. NUNCA describas apariencia fisica, ropa, rasgos ni el ambiente (el start frame "
+            f"ya lo resuelve). Escribe camera y action en {'español' if lang == 'es' else 'ingles'}.\n"
+            f"Notas globales: {p['settings'].get('global_notes') or '-'}\n"
             "Para CADA clip devuelve: "
-            '{"scenes":[{"scene":<n>,"clips":[{"clip":<k>,"camera":"plano/movimiento de camara en ingles","action_en":"accion del avatar en ingles, concreta (mirada, gestos, objetos)",'
-            '"delivery":"tono de voz en 3-5 palabras en ingles","action_es":"accion en español, una frase",'
+            '{"scenes":[{"scene":<n>,"clips":[{"clip":<k>,"camera":"encuadre/camara en una frase","action_en":"accion y objetos, 1-3 frases",'
+            '"delivery":"","action_es":"accion en español, una frase",'
             '"dialogue_es":"traduccion al español hablado del dialogue_en (vacio si no hay dialogo), maximo max_words_es palabras"}]}]}\n\n'
             + json.dumps(items, ensure_ascii=False))})
         data = claude.ask_json(content, system=SYSTEM, model=p["settings"]["claude_model"], max_tokens=6000)

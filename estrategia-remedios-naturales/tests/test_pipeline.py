@@ -46,16 +46,21 @@ def fake_video(prompt: str) -> bytes:
 
 def fake_ask_json(content, *, system="", model="", max_tokens=0):
     if isinstance(content, str):
-        if content.startswith("Traduce"):
+        if content.startswith("Traduce cada linea") or content.startswith("Traduce las siguientes") or (content.startswith("Traduce") and "natural cada" not in content[:40]):
             rows = [l.split("\t", 1) for l in content.split("\n\n", 1)[1].splitlines()]
             return {"translations": [{"i": int(i), "es": "ES: " + t} for i, t in rows]}
-        if content.startswith("Avatar:"):
-            items = json.loads(content.split("ESCENAS:\n", 1)[1])
-            return {"scenes": [{"n": it["n"], "action": f"Points at the chest {it['n']}", "image_prompt": f"prompt img {it['n']}", "dialogue_es": "es"} for it in items]}
+        if content.startswith("Traduce al español natural"):
+            items = json.loads(content.split("\n\n", 1)[1])
+            return {"scenes": [{"n": it["n"], "dialogue_es": "es"} for it in items]}
         if content.startswith("Del siguiente guion"):
             return {"keywords": ["ginger", "free", "three"]}
     else:
         txt = content[-1]["text"]
+        if txt.startswith("META-PROMPT"):
+            close = "Use the provided character image for the person's appearance, face, and clothing exactly as shown." \
+                if txt.startswith("META-PROMPT 1") else \
+                "Use Image A for the specific action and Image B for the character appearance and environment continuity."
+            return {"image_prompt": "Vertical 9:16 shot. " + close, "action": "Points at the chest"}
         if txt.startswith("Analiza a la persona"):
             return {"description": "a man", "gender": "male", "age_range": "35-45",
                     "voice": {"gender": "male", "age": "middle_aged", "tone": "warm"}, "summary_es": "ok"}
@@ -148,6 +153,13 @@ def test_full_pipeline(client):
     assert client.post(f"/api/projects/{pid}/fragment").status_code == 400
     client.patch(f"/api/projects/{pid}/settings", json={"output_language": "en"})   # el flujo completo se prueba en ingles
     # Fase 3
+    assert client.post(f"/api/projects/{pid}/images/generate").status_code == 200
+    j = wait(client, pid, "images")
+    assert j["status"] == "done" and j["message"].startswith("ℹ️"), j     # metodo de la guia: primero solo el start frame
+    p = client.get(f"/api/projects/{pid}").json()
+    assert p["scenes"][0].get("image") and not any(s.get("image") for s in p["scenes"][1:])
+    assert p["scenes"][0]["image_prompt"].endswith("exactly as shown.") and p["scenes"][1]["image_prompt"].endswith("environment continuity.")
+    client.post(f"/api/projects/{pid}/images/0/approve", json={"approved": True})
     assert client.post(f"/api/projects/{pid}/images/generate").status_code == 200
     assert wait(client, pid, "images")["status"] == "done"
     assert client.post(f"/api/projects/{pid}/images/0/regenerate", json={"mode": "edit", "notes": "sonrie mas"}).status_code == 200
@@ -303,7 +315,8 @@ def test_spanish_output_and_blurred_layout(client):
     pid = client.post("/api/projects", json={"name": "es"}).json()["id"]
     c = {"dialogue": "Hola a todos", "dialogue_en": "Hello everyone", "lang": "es", "camera": "Close-up.",
          "action_en": "Smiles.", "delivery": "warm"}
-    assert "in Spanish" in fragment.build_prompt(c) and "Hola a todos" in fragment.build_prompt(c)
+    vp = fragment.build_prompt(c)
+    assert "Hola a todos" in vp and vp.endswith("Continúa desde ahí.") and "Grabado con iPhone" in vp and "diciendo en español" in vp
     words = [{"text": f"w{i}", "start": i * 0.5, "end": i * 0.5 + 0.4} for i in range(40)]
     assert all(len(ch) <= 17 for ch in fragment.chunk_words(words, "es"))
     # capa difuminada: sin detalle fino (muy baja frecuencia)
@@ -356,3 +369,21 @@ def test_qa_retries_until_avatar_and_action_ok(client, monkeypatch):
     images.generate(pid, 0)
     assert len(seen) == 2 and "Hands must point at the lungs" in seen[1] and "CORRECTION" in seen[1]
     assert store.get(pid)["scenes"][0]["image"]["qa"]["ok"] is True
+
+
+def test_guide_chain_uses_previous_image_as_reference(client):
+    from app.phases import images
+    from app import store
+    pid = client.post("/api/projects", json={"name": "chain"}).json()["id"]
+    av = store.path(pid, "avatar", "a.jpg"); Image.new("RGB", (100, 100)).save(av)
+    fr = [store.path(pid, "frames", f"f{i}.jpg") for i in range(2)]
+    for f in fr: Image.new("RGB", (100, 180)).save(f)
+    gen0 = store.path(pid, "images", "g0.jpg"); Image.new("RGB", (100, 180), (9, 9, 9)).save(gen0)
+    p = {"id": pid, "avatar": {"file": store.rel(pid, av)}, "settings": {"global_notes": ""},
+         "scenes": [{"idx": 0, "frame": store.rel(pid, fr[0]), "image": {"file": store.rel(pid, gen0)}, "image_prompt": "P0"},
+                    {"idx": 1, "frame": store.rel(pid, fr[1]), "image_prompt": "P1"}]}
+    _, refs0 = images._compose_guide(p, p["scenes"][0], "")
+    assert [l.split(" -")[0] for l, _ in refs0] == ["Reference image", "Character image"]
+    prompt, refs = images._compose_guide(p, p["scenes"][1], "que sonria")
+    assert [l.split(" -")[0] for l, _ in refs] == ["Image A", "Image B", "Image C"]
+    assert refs[1][1].name == "g0.jpg" and prompt.startswith("P1") and "que sonria" in prompt
