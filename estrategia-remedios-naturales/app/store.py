@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,
     "scene_ref_mode": "guide",              # guide (metodo de la guia, encadenado) | swap | blur | none | full
+    "chain_mode": "sequential",             # sequential (guia) | anchor (rapido: todas usan el start frame, en paralelo)
     "image_qa": True,                       # Claude revisa cada imagen y corrige hasta 2 veces
     "output_language": "es",                # idioma del video final: es | en
     "dubvoice_video_model": "veo-3.1-fast",

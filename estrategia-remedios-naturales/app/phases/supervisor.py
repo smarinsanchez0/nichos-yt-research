@@ -118,6 +118,8 @@ class Supervisor:
             self.state[key] = "gave_up"
             return f"presupuesto agotado ({self.spent}/{self.budget} creditos)"
         self.attempts[key] = self.attempts.get(key, 0) + 1
+        with store.edit(self.pid) as q:
+            q["scenes"][key[0]]["clips"][key[1]]["attempts"] = self.attempts[key]
         self.gen[key] = self.gen.get(key, 0) + 1
         self.state[key] = "queued"
         self.pool.submit(self._work, key, overrides or {}, self.gen[key])

@@ -573,3 +573,24 @@ def test_supervisor_gives_up_after_max_attempts(client, monkeypatch):
     with pytest.raises(RuntimeError, match="sin resolver"):
         supervisor.start(pid, lambda msg=None, progress=None: None)
     assert store.get(pid)["scenes"][0]["clips"][0]["status"] == "error"
+
+
+def test_cli_demo_end_to_end_delivers_final_video(tmp_path):
+    """La skill /remedios usa este comando: video + avatar -> MP4 final 1080x1920 con reporte (servicios simulados)."""
+    import subprocess, sys
+    root = Path(__file__).resolve().parents[1]
+    r = subprocess.run([sys.executable, "-m", "app.cli", "run", "--demo", "--name", "t", "--out", str(tmp_path)],
+                       cwd=root, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
+    res = json.loads([l for l in r.stdout.splitlines() if l.startswith("RESULT_JSON:")][-1].split(":", 1)[1])
+    assert res["ok"] and Path(res["video"]).exists() and Path(res["contact_sheet"]).exists()
+    info = media.probe(Path(res["video"]))
+    assert (info["width"], info["height"]) == (1080, 1920) and info["has_audio"]
+    assert "Voz elegida" in r.stdout and "FASE 5" in r.stdout and "Aceptado" in r.stdout
+
+
+def test_cli_doctor_runs():
+    import subprocess, sys
+    root = Path(__file__).resolve().parents[1]
+    r = subprocess.run([sys.executable, "-m", "app.cli", "doctor"], cwd=root, capture_output=True, text=True, timeout=60)
+    assert "ffmpeg" in r.stdout

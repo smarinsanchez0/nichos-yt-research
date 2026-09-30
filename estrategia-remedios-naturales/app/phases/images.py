@@ -54,6 +54,8 @@ def _compose_guide(p: dict, s: dict, notes: str):
     """Metodo de la guia: clip 1 = captura + avatar; siguientes = Imagen A (captura, accion) + Imagen B (imagen anterior generada)."""
     pid = p["id"]
     prev = _prev_image(p, s["idx"])
+    if p["settings"].get("chain_mode") == "anchor" and s["idx"] > 0 and (p["scenes"][0].get("image") or {}).get("file"):
+        prev = p["scenes"][0]        # modo rapido: todas se apoyan en el start frame (se pueden generar en paralelo)
     frame, avatar = abs_path(pid, s["frame"]), abs_path(pid, p["avatar"]["file"])
     tail = ""
     if notes:
@@ -277,6 +279,23 @@ def _generate_chain(pid: str, prog, indices: list[int]) -> None:
     p = store.get(pid)
     first_needs_review = indices[0] == 0 and not (p["scenes"][0].get("image") or {}).get("approved")
     todo = [0] if first_needs_review else indices
+    if p["settings"].get("chain_mode") == "anchor" and not first_needs_review and len(todo) > 1:
+        errors: list[str] = []
+        done = [0]
+
+        def one(i):
+            try:
+                generate(pid, i)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"Escena {i + 1}: {e}")
+            done[0] += 1
+            prog(f"Imagenes {done[0]}/{len(todo)} (modo rapido, en paralelo)", done[0] / len(todo))
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            list(ex.map(lambda i: (time.sleep(1.0), one(i)), todo))
+        if errors:
+            raise RuntimeError(" | ".join(errors)[:900])
+        return
     for n, i in enumerate(todo):
         prog(f"Escena {i + 1}: generando ({n + 1}/{len(todo)}) — cada imagen usa la anterior como referencia…", n / len(todo))
         try:

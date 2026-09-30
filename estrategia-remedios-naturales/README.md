@@ -30,6 +30,17 @@ La barra superior muestra cuáles detectó (nunca se muestran completas).
 
 Salida: `data/projects/<id>/final/reel_final.mp4` (1080×1920).
 
+## Skill `/remedios` (modo automático, sin pantalla)
+Video en inglés + foto del avatar -> Reel final editado, con auditoría en cada fase y una sola voz de IA.
+```bash
+bash mac/instalar_skill.sh          # instala la skill en ~/.claude/skills/remedios
+# en Claude Code:  /remedios ~/Videos/original.mp4 ~/Fotos/avatar.jpg
+python -m app.cli run --demo        # prueba sin gastar créditos
+python -m app.cli doctor            # revisa keys, ffmpeg y dependencias
+```
+Con el repo abierto en Claude Code, `/remedios` ya funciona desde `.claude/skills/remedios/`. El MP4 queda en `~/Movies/REMEDIOS/`.
+Comandos de apoyo: `status`, `edit`, `redo-clip`, `redo-image` (`python -m app.cli -h`).
+
 ## Supervisor Claude (Fase 5, 1 clic)
 `app/phases/supervisor.py`: lanza todos los clips (máx. 3 en paralelo, respetando el límite de DubVoice), audita cada resultado
 (duración, audio, texto hablado vs diálogo, 3 fotogramas comparados con la imagen aprobada) y Claude decide: aceptar, reintentar con otro
