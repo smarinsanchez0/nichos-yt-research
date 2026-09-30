@@ -117,35 +117,64 @@ def image(prompt: str, refs: list[Path], model: str = "nano-banana-2", aspect: s
     return download(urls[0])
 
 
-_video_poll_url: list[tuple[str, str]] = []
+_poll_cache: dict[str, tuple[str, str]] = {}
+
+
+def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[tuple[str, str]],
+                     timeout: float, interval: float, progress=None) -> tuple[str, list[str]]:
+    r = request("POST", f"{BASE}{path}", json=body, headers=_h(), timeout=600)
+    d = _check(service, r)
+    tid = _task_id(d)
+    urls = _urls(d)
+    if urls and _status(d) not in {"pending", "processing", "queued"}:
+        return tid or "sync", urls
+    if not tid:
+        raise RuntimeError(f"{service} no devolvio id de tarea: {str(d)[:300]}")
+    if progress:
+        progress(f"{service} en cola (task {tid[:8]}…)")
+
+    def get():
+        for p_, key in ([_poll_cache[path]] if path in _poll_cache else poll_candidates):
+            g = request("GET", f"{BASE}{p_}", params={key: tid}, headers=_h())
+            if g.status_code == 404:
+                continue
+            _poll_cache[path] = (p_, key)
+            return _check(service, g)
+        raise RuntimeError(f"{service}: no encontre la ruta para consultar la tarea (revisa /dashboard/api-docs).")
+
+    return tid, _wait(get, service, timeout, interval)
 
 
 def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str = "9:16",
         resolution: str = "720p", progress=None, timeout: float = 1200) -> tuple[str, bytes]:
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect, "resolution": resolution,
             "ref_images": [data_uri(image_path, 1600)], "mode_image": "frame"}
-    r = request("POST", f"{BASE}/api/v1/video", json=body, headers=_h(), timeout=600)
-    d = _check("DubVoice (video)", r)
-    tid = _task_id(d)
-    urls = _urls(d)
-    if urls and _status(d) not in {"pending", "processing", "queued"}:
-        return tid or "sync", download(urls[0])
-    if not tid:
-        raise RuntimeError(f"DubVoice (video) no devolvio id de tarea: {str(d)[:300]}")
-    if progress:
-        progress(f"Veo (DubVoice) en cola (task {tid[:8]}…)")
-
-    candidates = [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")]
-
-    def get():
-        for path, key in (_video_poll_url or candidates):
-            g = request("GET", f"{BASE}{path}", params={key: tid}, headers=_h())
-            if g.status_code == 404:
-                continue
-            if not _video_poll_url:
-                _video_poll_url.append((path, key))
-            return _check("DubVoice (video)", g)
-        raise RuntimeError("DubVoice: no encontre la ruta para consultar el video (revisa /dashboard/api-docs).")
-
-    urls = _wait(get, "DubVoice (video)", timeout, 8)
+    tid, urls = _submit_and_wait("DubVoice (video)", "/api/v1/video", body,
+                                 [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")],
+                                 timeout, 8, progress)
     return tid, download(urls[0])
+
+
+# ------------------------------------------------------------------ voces
+def list_voices(gender: str | None = None, language: str = "en", n: int = 40) -> list[dict]:
+    params = {"provider": "elevenlabs", "language": language, "page_size": n}
+    if gender in ("male", "female"):
+        params["gender"] = gender
+    r = request("GET", f"{BASE}/api/v1/voices", params=params, headers=_h(), timeout=60)
+    if r.status_code != 200:
+        raise fail("DubVoice (voces)", r)
+    out = []
+    for v in r.json().get("voices", []):
+        out.append({"voice_id": v.get("voice_id"), "name": v.get("name"), "category": "dubvoice",
+                    "gender": (v.get("gender") or "").lower(), "age": (v.get("age") or "").lower(),
+                    "accent": (v.get("accent") or "").lower(), "descriptive": (v.get("description") or v.get("descriptive") or "").lower(),
+                    "use_case": (v.get("use_case") or "").lower(), "preview_url": v.get("preview_url")})
+    return out
+
+
+def voice_change(audio_url: str, voice_id: str, progress=None) -> bytes:
+    """Cambia la voz de un audio (URL publica) a `voice_id` conservando tiempos (2.000 creditos/min)."""
+    tid, urls = _submit_and_wait("DubVoice (cambio de voz)", "/api/v1/voice-changer",
+                                 {"audio_url": audio_url, "target_voice_id": voice_id},
+                                 [("/api/v1/voice-changer", "task_id"), ("/api/v1/voice-changer", "id")], 600, 5, progress)
+    return download(urls[0])

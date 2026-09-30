@@ -11,7 +11,7 @@ Requisitos: Python 3.10+. ffmpeg (`brew install ffmpeg`; si no está, se usa el 
 ```bash
 bash mac/instalar_mac.sh     # crea "ESTRATEGIA REMEDIOS NATURALES.app" en /Applications
 ```
-Doble clic para abrir (arrástrala al Dock). La primera vez instala dependencias (2-3 min). Cerrar la app (Cmd+Q en el Dock) apaga el servidor. Logs: `~/Library/Logs/EstrategiaRemediosNaturales.log`. Si mueves la carpeta del proyecto, vuelve a ejecutar el instalador.
+Doble clic para abrir (arrástrala al Dock). La primera vez instala dependencias (2-3 min). Cerrar la app (Cmd+Q en el Dock) apaga el servidor. Logs: `~/Library/Logs/EstrategiaRemediosNaturales.log`. La app se actualiza sola con `git pull` (reinstala dependencias si cambian). Si mueves la carpeta del proyecto, vuelve a ejecutar el instalador.
 
 ## API keys
 Se importan solas de `~/.zshrc` (también `.zprofile`, `.zshenv`, `.bashrc`, `.env`). Nombres aceptados:
@@ -22,10 +22,10 @@ La barra superior muestra cuáles detectó (nunca se muestran completas).
 | Fase | Qué hace | Servicio |
 |---|---|---|
 | 1 Avatar | Subes la foto; Claude la describe y propone perfil de voz | Claude (visión) |
-| 2 Análisis | Transcribe (palabra por palabra) +1, traduce +1, detecta escenas y lee los frames +1, redacta prompts de imagen +1 | ElevenLabs Scribe, ffmpeg, Claude |
+| 2 Análisis | Transcribe (palabra por palabra) +1, traduce +1, detecta escenas y lee los frames +1, redacta prompts de imagen +1 | Whisper local (gratis) o ElevenLabs Scribe, ffmpeg, Claude |
 | 3 Imágenes | Nano Banana pone al avatar en la pose/decorado de cada frame original; retocar con prompt, regenerar, aprobar | Google AI Studio (`gemini-2.5-flash-image`) o Kie.ai |
 | 4 Guion | Reparte el guion por imagen con tiempos exactos y crea el prompt de video (diálogo + acción) | Claude |
-| 5 Videos | Anima cada imagen (Veo 3 fast, 9:16, con voz) y unifica la voz en todos los clips | Kie.ai, ElevenLabs speech-to-speech |
+| 5 Videos | Anima cada imagen (Veo 3 fast, 9:16, con voz) y unifica la voz en todos los clips | Kie.ai o DubVoice (video); cambio de voz con DubVoice o ElevenLabs |
 | 6 Edición | Recorta silencios, une en orden, subtítulos Poppins (blanco, trazo negro, palabras clave amarillas), audio a -16 LUFS | ffmpeg, Scribe, Claude |
 
 Salida: `data/projects/<id>/final/reel_final.mp4` (1080×1920).

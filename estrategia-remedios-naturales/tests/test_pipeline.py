@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from app import config, media  # noqa: E402
-from app.services import claude, eleven, gemini, kie  # noqa: E402
+from app.services import claude, dubvoice, eleven, gemini, kie, stt  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="ern-media-"))
 SCRIPT = ("Did you know that ginger tea can calm your stomach in minutes. "
@@ -73,7 +73,7 @@ def fake_ask_json(content, *, system="", model="", max_tokens=0):
     raise AssertionError("prompt inesperado: " + str(content)[:200])
 
 
-def fake_transcribe(audio, language_code=None):
+def fake_transcribe(audio, settings=None, language_code=None):
     d = media.probe(audio)["duration"]
     words = SCRIPT.split()
     step = d / len(words)
@@ -85,15 +85,16 @@ def fake_transcribe(audio, language_code=None):
 def client():
     os.environ["ELEVENLABS_API_KEY"] = os.environ["KIE_API_KEY"] = os.environ["GOOGLE_API_KEY"] = "test"
     claude.ask_json = fake_ask_json
-    eleven.transcribe = fake_transcribe
+    stt.transcribe = fake_transcribe
     eleven.list_voices = lambda: [
         {"voice_id": "v1", "name": "Ana", "category": "premade", "gender": "female", "age": "young", "accent": "american",
          "descriptive": "warm", "use_case": "social media", "preview_url": None},
         {"voice_id": "v2", "name": "Bob", "category": "premade", "gender": "male", "age": "middle aged", "accent": "american",
          "descriptive": "warm", "use_case": "conversational", "preview_url": None}]
-    eleven.speech_to_speech = lambda audio, vid: media.run(
-        ["-f", "lavfi", "-i", "sine=f=500:d=8", "-f", "mp3", "-"], check=False).stdout.encode("latin1") if False else \
-        _mp3(8)
+    dubvoice.list_voices = lambda gender=None, language="en", n=40: [
+        v for v in eleven.list_voices() if not gender or v["gender"] == gender]
+    kie.upload_file = lambda path, mime="audio/mpeg", folder="": "https://example.com/a.mp3"
+    dubvoice.voice_change = lambda url, vid, progress=None: _mp3(8)
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": _jpg()
     kie.upload_image = lambda path: "https://example.com/x.jpg"
     kie.veo_generate = lambda prompt, url, model="veo3_fast", aspect="9:16", progress=None, timeout=0: ("task1", fake_video(prompt))
@@ -216,3 +217,42 @@ def test_dubvoice_adapter(monkeypatch, tmp_path):
     monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
     assert dubvoice.veo("p", img)[1] == b"DATA:https://x/v.mp4"
     assert dubvoice.image("p", [img]) == b"DATA:https://x/i.png"
+
+
+def test_local_whisper_adapter(monkeypatch, tmp_path):
+    import types
+    import faster_whisper
+    w = lambda t, a, b: types.SimpleNamespace(word=f" {t}", start=a, end=b)
+
+    class FakeModel:
+        def __init__(self, *a, **k): pass
+        def transcribe(self, path, **k):
+            assert k["word_timestamps"] is True
+            return iter([types.SimpleNamespace(words=[w("Hello,", 0, .4), w("world.", .5, 1)])]), types.SimpleNamespace(language="en")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
+    stt._models.clear()
+    r = stt.transcribe_local(tmp_path / "x.mp3")
+    assert [x["text"] for x in r["words"]] == ["Hello,", "world."] and r["language"] == "en"
+
+
+def test_dubvoice_voice_changer(monkeypatch):
+    import importlib
+    importlib.reload(dubvoice)   # el fixture del pipeline sustituyo funciones de este modulo
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+
+    class R:
+        def __init__(self, j): self.status_code, self._j, self.text = 200, j, str(j)
+        def json(self): return self._j
+
+    def fake(method, url, **kw):
+        if method == "POST":
+            assert kw["json"] == {"audio_url": "https://a/x.mp3", "target_voice_id": "v9"}
+            return R({"task_id": "t1"})
+        return R({"status": "completed", "result": "https://a/out.mp3"})
+
+    monkeypatch.setattr(dubvoice, "request", fake)
+    monkeypatch.setattr(dubvoice, "download", lambda u: b"AUDIO")
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    dubvoice._poll_cache.clear()
+    assert dubvoice.voice_change("https://a/x.mp3", "v9") == b"AUDIO"

@@ -10,7 +10,8 @@ APP="$DEST/$NAME.app"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$HERE/launcher.sh" "$APP/Contents/MacOS/launcher"
+# el ejecutable solo delega en mac/run_app.sh: al hacer `git pull` la app se actualiza sola
+printf '#!/bin/bash\nexec /bin/bash "%s/mac/run_app.sh"\n' "$PROJECT" > "$APP/Contents/MacOS/launcher"
 chmod +x "$APP/Contents/MacOS/launcher"
 cp "$HERE/icon.icns" "$APP/Contents/Resources/icon.icns"
 printf '%s' "$PROJECT" > "$APP/Contents/Resources/project_path"

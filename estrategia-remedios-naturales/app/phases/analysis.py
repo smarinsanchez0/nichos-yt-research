@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from .. import media, store
-from ..services import claude, eleven
+from ..services import claude, stt
 from .common import abs_path, assign_words, make_segments
 
 SYSTEM_BASE = """Trabajas en un equipo que replica videos virales (Instagram Reels, 9:16) que venden un libro digital
@@ -24,8 +24,8 @@ def _step_transcription(pid, prog):
         raise RuntimeError("El video no tiene pista de audio: no hay nada que transcribir.")
     prog("Extrayendo audio…", 0.05)
     audio = media.extract_audio(abs_path(pid, src["file"]), store.path(pid, "work", "source_audio.mp3"))
-    prog("Transcribiendo con ElevenLabs Scribe (marcas por palabra)…", 0.1)
-    tr = eleven.transcribe(audio)
+    prog("Transcribiendo (marcas por palabra; la primera vez local descarga el modelo ~250 MB)…", 0.1)
+    tr = stt.transcribe(audio, p["settings"])
     if not tr["words"]:
         raise RuntimeError("No se detecto voz en el video.")
     with store.edit(pid) as q:

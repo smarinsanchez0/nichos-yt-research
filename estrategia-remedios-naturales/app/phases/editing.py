@@ -5,7 +5,7 @@ import re
 
 from .. import media, store
 from ..config import FONTS_DIR
-from ..services import claude, eleven
+from ..services import claude, stt
 from .common import abs_path, norm
 
 FALLBACK_KEY = {"free", "secret", "natural", "pain", "never", "stop", "only", "hidden", "doctors", "toxic", "cure",
@@ -122,7 +122,7 @@ def run(pid: str, prog) -> None:
 
     prog("Transcribiendo el audio final para los subtitulos exactos…", 0.7)
     audio = media.extract_audio(joined, work / "final_audio.mp3")
-    tr = eleven.transcribe(audio, language_code="en")
+    tr = stt.transcribe(audio, st, language_code="en")
     expected = " ".join(c.get("dialogue", "") for _, _, c in ordered)
     ratio = overlap(expected, tr["text"])
     prog("Eligiendo palabras clave…", 0.78)

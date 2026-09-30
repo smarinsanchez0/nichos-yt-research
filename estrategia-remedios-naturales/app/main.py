@@ -12,7 +12,7 @@ from PIL import Image
 
 from . import config, jobs, media, store
 from .phases import analysis, avatar, editing, fragment, images, videos
-from .services import eleven
+from .services import dubvoice, eleven
 
 app = FastAPI(title="ESTRATEGIA REMEDIOS NATURALES")
 STATIC = Path(__file__).parent / "static"
@@ -248,7 +248,11 @@ def patch_clip(pid: str, i: int, j: int, body: dict = Body(...)):
 def get_voices(pid: str):
     p = P(pid)
     try:
-        vs = eleven.list_voices()
+        prof = (p["avatar"] or {}).get("profile") or {}
+        if p["settings"].get("voice_provider") == "elevenlabs":
+            vs = eleven.list_voices()
+        else:
+            vs = dubvoice.list_voices((prof.get("voice") or {}).get("gender"))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e))
     return {"voices": videos.recommend((p["avatar"] or {}).get("profile"), vs)[:40],

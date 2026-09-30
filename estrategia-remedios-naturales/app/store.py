@@ -23,6 +23,9 @@ DEFAULT_SETTINGS = {
     "video_provider": "kie",                # kie | dubvoice
     "dubvoice_image_model": "nano-banana-2",
     "dubvoice_video_model": "veo-3.1-fast",
+    "stt_provider": "local",                # local (gratis) | elevenlabs
+    "whisper_model": "small.en",
+    "voice_provider": "dubvoice",           # dubvoice | elevenlabs
     "unify_voice": True,
     "voice_id": None,
     "voice_name": None,

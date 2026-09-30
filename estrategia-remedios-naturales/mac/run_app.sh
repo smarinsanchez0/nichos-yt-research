@@ -1,7 +1,6 @@
 #!/bin/bash
 # Ejecutable de la app "ESTRATEGIA REMEDIOS NATURALES": arranca el servidor y abre la interfaz.
-APP_CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT="$(cat "$APP_CONTENTS/Resources/project_path")"
+PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 PORT="${ERN_PORT:-8000}"
 URL="http://127.0.0.1:$PORT"
@@ -26,10 +25,12 @@ PY="$(command -v python3)"
 if [ -z "$PY" ]; then
   alert "Falta Python 3. Abre Terminal y ejecuta: xcode-select --install  (o brew install python). Luego abre la app otra vez."; exit 1
 fi
-if [ ! -x .venv/bin/uvicorn ]; then
-  notify "Preparando por primera vez (2-3 min)…"
-  { "$PY" -m venv .venv && .venv/bin/pip install -q -r requirements.txt; } >>"$LOG" 2>&1 \
+STAMP="$(shasum requirements.txt 2>/dev/null | cut -d' ' -f1)"
+if [ ! -x .venv/bin/uvicorn ] || [ "$(cat .venv/.req_stamp 2>/dev/null)" != "$STAMP" ]; then
+  notify "Instalando dependencias (2-3 min)…"
+  { [ -d .venv ] || "$PY" -m venv .venv; .venv/bin/pip install -q -r requirements.txt; } >>"$LOG" 2>&1 \
     || { alert "No se pudieron instalar las dependencias. Revisa $LOG"; exit 1; }
+  echo "$STAMP" > .venv/.req_stamp
 fi
 
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" >>"$LOG" 2>&1 &

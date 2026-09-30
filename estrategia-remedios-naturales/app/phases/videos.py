@@ -71,7 +71,10 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
         if st.get("unify_voice") and st.get("voice_id") and clip.get("dialogue") and media.probe(raw)["has_audio"]:
             try:
                 aud = media.extract_audio(raw, store.path(pid, "videos", f"s{si:02d}_c{ci}_src.mp3"))
-                new = eleven.speech_to_speech(aud, st["voice_id"])
+                if st.get("voice_provider") == "elevenlabs":
+                    new = eleven.speech_to_speech(aud, st["voice_id"])
+                else:
+                    new = dubvoice.voice_change(kie.upload_file(aud, "audio/mpeg"), st["voice_id"])
                 mp3 = store.path(pid, "videos", f"s{si:02d}_c{ci}_voice.mp3")
                 mp3.write_bytes(new)
                 final = store.path(pid, "videos", f"s{si:02d}_c{ci}.mp4")

@@ -129,3 +129,16 @@ def veo_generate(prompt: str, image_url: str, model: str = "veo3_fast", aspect: 
         if flag in (2, 3):
             raise RuntimeError(f"Veo fallo: {d.get('errorMessage') or d.get('errorCode') or 'sin detalle'}")
     raise RuntimeError("Veo tardo demasiado (timeout)")
+
+
+def upload_file(path: Path, mime: str = "audio/mpeg", folder: str = "ern/audio") -> str:
+    """Sube un archivo (audio) a Kie y devuelve una URL publica temporal."""
+    b64 = base64.b64encode(Path(path).read_bytes()).decode()
+    body = {"base64Data": f"data:{mime};base64,{b64}", "uploadPath": folder,
+            "fileName": f"{Path(path).stem}-{int(time.time())}{Path(path).suffix}"}
+    r = request("POST", UPLOAD, json=body, headers=_h(), timeout=300)
+    d = _check("Kie (subida)", r).get("data") or {}
+    url = d.get("downloadUrl") or d.get("fileUrl") or d.get("url")
+    if not url:
+        raise RuntimeError("Kie (subida) no devolvio URL")
+    return url
