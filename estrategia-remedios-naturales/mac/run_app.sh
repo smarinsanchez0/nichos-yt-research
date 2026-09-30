@@ -28,7 +28,7 @@ fi
 STAMP="$(shasum requirements.txt 2>/dev/null | cut -d' ' -f1)"
 if [ ! -x .venv/bin/uvicorn ] || [ "$(cat .venv/.req_stamp 2>/dev/null)" != "$STAMP" ]; then
   notify "Instalando dependencias (2-3 min)…"
-  { [ -d .venv ] || "$PY" -m venv .venv; .venv/bin/pip install -q -r requirements.txt; } >>"$LOG" 2>&1 \
+  { [ -d .venv ] || "$PY" -m venv .venv; .venv/bin/python -m pip install -q --upgrade pip; .venv/bin/python -m pip install -q -r requirements.txt; } >>"$LOG" 2>&1 \
     || { alert "No se pudieron instalar las dependencias. Revisa $LOG"; exit 1; }
   echo "$STAMP" > .venv/.req_stamp
 fi
