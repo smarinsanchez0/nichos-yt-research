@@ -36,8 +36,12 @@ fi
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" >>"$LOG" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null; exit 0' TERM INT HUP
-for _ in $(seq 1 60); do up && break; sleep 0.5; done
-if ! up; then alert "El servidor no arranco. Revisa $LOG"; kill $SERVER 2>/dev/null; exit 1; fi
+for _ in $(seq 1 240); do up && break; kill -0 $SERVER 2>/dev/null || break; sleep 0.5; done
+if ! up; then
+  ERR="$(tail -n 5 "$LOG" 2>/dev/null | tr '"' "'" | tr '\n' ' ' | cut -c1-380)"
+  alert "El servidor no arranco. Ultimo error: $ERR"
+  kill $SERVER 2>/dev/null; exit 1
+fi
 notify "Lista. Abriendo la interfaz…"
 open_ui
 wait $SERVER
