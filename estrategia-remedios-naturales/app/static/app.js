@@ -77,7 +77,7 @@ function v2(p) {
   <div class="grow"><label>Transcripción</label><select data-setting="stt_provider"><option value="local" ${st.stt_provider === 'local' ? 'selected' : ''}>Local en tu Mac (gratis)</option><option value="elevenlabs" ${st.stt_provider === 'elevenlabs' ? 'selected' : ''}>ElevenLabs Scribe</option></select></div>
   <div class="grow"><label>Modelo de Claude</label><input value="${esc(st.claude_model)}" data-setting="claude_model"></div></div>
   <label>Notas globales para todas las escenas (ropa, estilo, banderas, lo que quieras forzar)</label><textarea data-setting="global_notes" placeholder="Ej: siempre con la bandera de EE.UU. a la izquierda; cocina luminosa estilo americano.">${esc(st.global_notes)}</textarea>
-  <p><button data-act="analyze" ${!src || running('analysis') ? 'disabled' : ''}>▶ Analizar video</button> <button class="ghost" data-act="reanalyze" ${!src || running('analysis') ? 'disabled' : ''}>Rehacer todo desde cero</button> <button class="ghost" data-act="redoScenes" ${!src || running('analysis') ? 'disabled' : ''}>Rehacer solo escenas + prompts</button></p>
+  <p><button data-act="analyze" ${!src || running('analysis') ? 'disabled' : ''}>▶ Analizar video</button> <button class="ghost" data-act="reanalyze" ${!src || running('analysis') ? 'disabled' : ''}>Rehacer todo desde cero</button> <button class="ghost" data-act="redoPrompts" ${!src || running('analysis') ? 'disabled' : ''}>Rehacer solo prompts de imagen</button> <button class="ghost" data-act="redoScenes" ${!src || running('analysis') ? 'disabled' : ''}>Rehacer solo escenas + prompts</button></p>
   ${jobBox('analysis', 'Análisis')}</div>
   <div style="width:220px">${src ? `<video src="${file(src.file)}" controls class="thumb"></video>` : ''}</div></div>
   <div class="pts">${Object.keys(names).map(k => `<div class="pt ${pts[k] ? 'ok' : ''}"><span class="dot"></span><b>${names[k]}</b><div class="muted">${pts[k] ? '+1 punto' : 'pendiente'}</div></div>`).join('')}</div>
@@ -99,7 +99,7 @@ function v3(p) {
   <div class="card row"><div><label>Proveedor de imagen</label><select data-setting="image_provider"><option value="google" ${st.image_provider === 'google' ? 'selected' : ''}>Google AI Studio (directo)</option><option value="dubvoice" ${st.image_provider === 'dubvoice' ? 'selected' : ''}>DubVoice.ai (más barato)</option><option value="kie" ${st.image_provider === 'kie' ? 'selected' : ''}>Kie.ai</option></select></div>
   <div class="grow"><label>Modelo (Google) · Nano Banana: gemini-2.5-flash-image (mejor precio) · gemini-3-pro-image-preview (máxima calidad)</label><input data-setting="image_model" value="${esc(st.image_model)}"></div>
   <div class="grow"><label>Modelo (Kie.ai)</label><input data-setting="kie_image_model" value="${esc(st.kie_image_model)}"></div><div class="grow"><label>Modelo (DubVoice): nano-banana-2 · nano-banana-2-lite · nano-banana-pro</label><input data-setting="dubvoice_image_model" value="${esc(st.dubvoice_image_model)}"></div></div>
-  <p><button data-act="genImages" ${running('images') ? 'disabled' : ''}>🎨 Generar imágenes faltantes</button> <button class="ghost" data-act="approveAll">Aprobar todas</button> <b>${appr}/${sc.length} aprobadas</b>${appr === sc.length ? ' <button data-goto="4">Continuar a la Fase 4 →</button>' : ''}</p>
+  <p><button data-act="genImages" ${running('images') ? 'disabled' : ''}>🎨 Generar imágenes faltantes</button> <button class="ghost" data-act="regenAll" ${running('images') ? 'disabled' : ''}>♻️ Regenerar TODAS desde cero</button> <button class="ghost" data-act="approveAll">Aprobar todas</button> <b>${appr}/${sc.length} aprobadas</b>${appr === sc.length ? ' <button data-goto="4">Continuar a la Fase 4 →</button>' : ''}</p>
   ${jobBox('images', 'Generación de imágenes')}
   ${sc.map(s => { const im = s.image, jn = `img:${s.idx}`; return `<div class="card ${im?.approved ? 'approved' : ''}"><div class="pair">
    <div><b>Escena ${s.idx + 1}</b> <span class="tag">original</span><img class="thumb" src="${file(s.frame)}"></div>
@@ -197,8 +197,10 @@ document.addEventListener('click', async e => {
     else if (a === 'uploadVideo') { const f = $('#videoFile').files[0]; if (!f) return toast('Elige un video', true); toast('Subiendo video…'); const fd = new FormData(); fd.append('file', f); await api('POST', `${base}/video`, fd, true); }
     else if (a === 'analyze') await api('POST', `${base}/analyze`, {});
     else if (a === 'reanalyze') { if (confirm('Se rehará todo el análisis (transcripción, traducción, escenas). ¿Continuar?')) await api('POST', `${base}/analyze`, { restart: true }); }
+    else if (a === 'redoPrompts') { toast('Reescribiendo prompts de imagen…'); await api('POST', `${base}/analyze`, { force: ['prompts'] }); }
     else if (a === 'redoScenes') await api('POST', `${base}/analyze`, { force: ['scenes'] });
     else if (a === 'genImages') await api('POST', `${base}/images/generate`, {});
+    else if (a === 'regenAll') { if (confirm('Se generarán de nuevo todas las imágenes con tu avatar (las anteriores quedan en el historial de versiones y se gastan créditos otra vez). ¿Continuar?')) await api('POST', `${base}/images/generate`, { scenes: S.p.scenes.map(x => x.idx) }); }
     else if (a === 'approveAll') await api('POST', `${base}/images/approve_all`);
     else if (a === 'approve') { const s = S.p.scenes[i]; await api('POST', `${base}/images/${i}/approve`, { approved: !s.image.approved }); }
     else if (a === 'version') await api('POST', `${base}/images/${i}/version/${el.dataset.n}`);

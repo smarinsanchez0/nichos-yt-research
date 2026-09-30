@@ -62,7 +62,7 @@ Describe CADA escena con precision fotografica para poder recrearla con una IA d
 Devuelve JSON: {{"scenes":[{{
  "n": <numero de escena tal cual>,
  "shot": "tipo de plano y angulo de camara (ej. medium close-up, eye level, handheld selfie style), encuadre vertical 9:16",
- "person": "posicion exacta del cuerpo, hacia donde mira, expresion facial, gestos de manos, que sostiene o senala",
+ "person": "SOLO la pose: posicion del cuerpo, hacia donde mira, expresion facial, gestos de manos, que sostiene o senala. PROHIBIDO describir ropa, cabello, edad, genero, rasgos fisicos o accesorios de la persona (sera reemplazada por otra)",
  "setting": "lugar y decorado con detalle (cocina, muebles, colores, bandera de EE.UU. si aparece y donde exactamente)",
  "props": ["objetos relevantes: frascos, plantas, ingredientes, libro, texto en pantalla..."],
  "on_screen_text": "texto visible o vacio",
@@ -129,7 +129,9 @@ Escribes prompts para Nano Banana (modelo de imagen de Google) que recrean una e
 de referencia (el avatar). El avatar se entrega como imagen de referencia aparte, asi que NO describas su cara: di 'the
 person from the reference photo'. Describe con precision: tipo de plano y angulo, pose corporal, direccion de la mirada,
 expresion, posicion de manos y objetos, decorado con todos los detalles (cocina estadounidense, bandera, plantas, frascos...),
-iluminacion. Estilo: fotografia 100% realista, natural, tipo contenido de iPhone/UGC, piel con textura real, sin aspecto de
+iluminacion. REGLA CLAVE: la persona original sera reemplazada por el avatar, asi que NUNCA describas su ropa, cabello, edad,
+genero, joyas, lentes ni rasgos fisicos (ignora esos datos si aparecen en la lectura de la escena); escribe siempre 'the person from
+the reference photo, wearing their own outfit from the reference photo'. Estilo: fotografia 100% realista, natural, tipo contenido de iPhone/UGC, piel con textura real, sin aspecto de
 render ni de IA. Formato vertical 9:16. Maximo 140 palabras por prompt, en ingles."""
 
 

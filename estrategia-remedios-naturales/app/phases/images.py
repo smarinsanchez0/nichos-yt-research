@@ -18,19 +18,27 @@ RULES = ("Photorealistic vertical 9:16 photograph, shot like authentic smartphon
 
 def _compose_new(p: dict, s: dict, notes: str) -> tuple[str, list[tuple[str, object]]]:
     pid = p["id"]
-    refs = [("IMAGE 1 - AVATAR (identity reference):", abs_path(pid, p["avatar"]["file"])),
-            ("IMAGE 2 - ORIGINAL FRAME of the video being replicated:", abs_path(pid, s["frame"]))]
+    prof = (p["avatar"] or {}).get("profile") or {}
+    refs = [("IMAGE 1 - THE AVATAR. This is the ONLY person allowed in the result: same face, hair, skin, age, body AND the same clothes/accessories:",
+             abs_path(pid, p["avatar"]["file"])),
+            ("IMAGE 2 - LAYOUT REFERENCE ONLY (camera framing, body pose, gesture, gaze, background, props, lighting). "
+             "The person shown here is a DIFFERENT person and must NOT appear:", abs_path(pid, s["frame"]))]
     anchor = next((o for o in p["scenes"] if o["idx"] != s["idx"] and (o.get("image") or {}).get("approved")), None)
     extra = ""
     if anchor:
-        refs.append(("IMAGE 3 - already approved frame of the same character (use ONLY for clothing and appearance consistency, "
-                     "ignore its pose and background):", abs_path(pid, anchor["image"]["file"])))
-        extra = " IMAGE 3 is only a consistency reference for outfit/appearance."
+        refs.append(("IMAGE 3 - an approved frame of the SAME avatar (keep identity and outfit consistent; ignore its pose and background):",
+                     abs_path(pid, anchor["image"]["file"])))
+        extra = " IMAGE 3 shows the avatar's approved look: match it."
     prompt = (
-        "Generate ONE image. The person in IMAGE 1 is the only character: keep their exact face, hair, skin tone, age and body "
-        "identical. Recreate IMAGE 2 as exactly as possible - same camera angle and framing, body pose, hand gestures, gaze "
-        "direction, facial expression, setting layout, props, lighting and color palette - but with the avatar from IMAGE 1 in "
-        f"place of the original person.{extra}\n\nSCENE DESCRIPTION: {s.get('image_prompt', '')}\n"
+        "Create ONE new photo. Start from the person in IMAGE 1 (the avatar) and place THAT exact person in the scene of IMAGE 2.\n"
+        "IDENTITY RULES (highest priority): the face, hairstyle, hair color, skin tone, facial hair, age, body build and the OUTFIT "
+        "(clothes, colors, accessories) must be taken from IMAGE 1 only. NEVER copy the face, hair, clothing, jewelry, glasses or "
+        "accessories of the person in IMAGE 2. If the person in IMAGE 2 wears something different from the avatar, dress the avatar "
+        "in the avatar's own outfit from IMAGE 1." + extra + "\n"
+        f"AVATAR DESCRIPTION (must match): {prof.get('description', '')}\n"
+        "SCENE RULES: from IMAGE 2 reproduce only the camera angle and framing, the body pose, hand gestures, gaze direction, "
+        "facial expression, the room/background layout, props and lighting.\n"
+        f"SCENE DESCRIPTION: {s.get('image_prompt', '')}\n"
         f"GLOBAL STYLE NOTES: {p['settings'].get('global_notes') or '-'}\n"
         + (f"EXTRA CHANGES REQUESTED BY THE DIRECTOR (apply them): {notes}\n" if notes else "") + RULES)
     return prompt, refs
