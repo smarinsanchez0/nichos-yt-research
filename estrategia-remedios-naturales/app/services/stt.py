@@ -11,8 +11,9 @@ _models: dict = {}
 def transcribe_local(audio: Path, language: str | None = "en", model_name: str = "small.en") -> dict:
     try:
         from faster_whisper import WhisperModel
-    except ImportError:
-        raise RuntimeError("Falta faster-whisper. Cierra la app y vuelve a abrirla para que instale las dependencias.")
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"faster-whisper no carga ({type(e).__name__}: {e}). Instala las dependencias con "
+                           "`.venv/bin/python -m pip install -r requirements.txt` o cambia la transcripcion a ElevenLabs en la Fase 2.")
     if model_name not in _models:  # la primera vez descarga el modelo (~250 MB)
         _models[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
     lang = None if model_name.endswith(".en") else language   # los modelos .en solo hablan ingles

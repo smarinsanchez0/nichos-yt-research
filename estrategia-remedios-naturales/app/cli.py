@@ -35,8 +35,9 @@ def cmd_doctor(_a) -> int:
     try:
         import faster_whisper  # noqa: F401
         _log("✅ faster-whisper (transcripcion local)")
-    except ImportError:
-        _log("❌ faster-whisper no instalado: pip install -r requirements.txt")
+    except Exception as e:  # noqa: BLE001  - se muestra el error REAL (no solo 'no instalado')
+        _log(f"❌ faster-whisper no carga: {type(e).__name__}: {e}")
+        _log("   Alternativa sin instalar nada: usa ElevenLabs Scribe -> ver `python -m app.cli run --stt elevenlabs`")
         ok = False
     if not config.get_key("google") and not config.get_key("kie"):
         _log("➖ Sin key de Google/Kie: no habra respaldo si DubVoice falla al generar imagenes")
@@ -69,7 +70,7 @@ def cmd_run(a) -> int:
     try:
         rep = autopilot.run_full(video, avatar, name=a.name, lang=a.lang, voice_id=a.voice_id, voice_gender=a.voice_gender,
                                  out_dir=Path(a.out).expanduser() if a.out else None, project=a.project,
-                                 fast=not a.sequential, notes=a.notes or "", log=_log)
+                                 fast=not a.sequential, notes=a.notes or "", stt_provider=a.stt, log=_log)
     except Exception as e:  # noqa: BLE001
         _log(f"❌ FALLO: {e}")
         _log("RESULT_JSON: " + json.dumps({"ok": False, "error": str(e)[:500]}, ensure_ascii=False))
@@ -123,6 +124,7 @@ def main(argv=None) -> int:
     r.add_argument("--voice-id"); r.add_argument("--voice-gender", choices=["male", "female"]); r.add_argument("--out")
     r.add_argument("--project"); r.add_argument("--notes"); r.add_argument("--sequential", action="store_true",
                                                                            help="imagenes en cadena (mas lento, mas continuidad)")
+    r.add_argument("--stt", choices=["local", "elevenlabs"], default=None, help="transcripcion: local (gratis) o elevenlabs")
     r.add_argument("--demo", action="store_true"); r.set_defaults(fn=cmd_run)
     s = sub.add_parser("status"); s.add_argument("--project", required=True); s.set_defaults(fn=cmd_status)
     e = sub.add_parser("edit"); e.add_argument("--project", required=True); e.set_defaults(fn=cmd_edit)

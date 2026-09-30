@@ -102,7 +102,7 @@ def build_report(pid: str, elapsed: float, warnings: list[str]) -> dict:
 
 def run_full(video: Path, avatar_img: Path, *, name: str | None = None, lang: str = "es", voice_id: str | None = None,
              voice_gender: str | None = None, out_dir: Path | None = None, project: str | None = None, fast: bool = True,
-             notes: str = "", log: Callable[[str], None] = print) -> dict:
+             notes: str = "", stt_provider: str | None = None, log: Callable[[str], None] = print) -> dict:
     t0 = time.time()
     warnings: list[str] = []
     if project:
@@ -117,6 +117,8 @@ def run_full(video: Path, avatar_img: Path, *, name: str | None = None, lang: st
                              chain_mode="anchor" if fast else "sequential", dubvoice_image_model="nano-banana-pro")
         if notes:
             q["settings"]["global_notes"] = notes
+        if stt_provider:
+            q["settings"]["stt_provider"] = stt_provider
     p = store.get(pid)
 
     # FASE 1
