@@ -73,10 +73,10 @@ def _urls(d: dict) -> list[str]:
     return []
 
 
-def _post(service: str, path: str, body: dict):
+def _post(service: str, path: str, body: dict, timeout: float = 600):
     """POST con espera automatica cuando DubVoice limita (429: max 3 en paralelo / 10 por minuto)."""
-    for attempt in range(30):
-        r = request("POST", f"{BASE}{path}", json=body, headers=_h(), timeout=600)
+    for attempt in range(20):
+        r = request("POST", f"{BASE}{path}", json=body, headers=_h(), timeout=timeout, retries=1)
         if r.status_code != 429:
             return r
         try:
@@ -114,19 +114,13 @@ def _wait(get, service: str, timeout: float, interval: float) -> list[str]:
     raise RuntimeError(f"{service} tardo demasiado (timeout)")
 
 
-def image(prompt: str, refs: list[Path], model: str = "nano-banana-2", aspect: str = "9:16") -> bytes:
+def image(prompt: str, refs: list[Path], model: str = "nano-banana-2", aspect: str = "9:16", progress=None) -> bytes:
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect}
     if refs:
         body["image_input"] = [data_uri(p) for p in refs][:4]
-    d = _check("DubVoice (imagen)", _post("DubVoice (imagen)", "/api/image-generate", body))
-    urls = _urls(d)
-    if not urls or _status(d) in {"pending", "processing", "queued"}:
-        tid = _task_id(d)
-        if not tid:
-            raise RuntimeError(f"DubVoice (imagen) no devolvio resultado ni id de tarea: {str(d)[:300]}")
-        urls = _wait(lambda: _check("DubVoice (imagen)", request(
-            "GET", f"{BASE}/api/image-generate/status", params={"id": tid}, headers=_h())),
-            "DubVoice (imagen)", 600, 4)
+    _, urls = _submit_and_wait("DubVoice (imagen)", "/api/image-generate", body,
+                               [("/api/image-generate/status", "id"), ("/api/image-generate/status", "task_id"),
+                                ("/api/image-generate/status", "taskId")], 240, 4, progress, post_timeout=120)
     return download(urls[0])
 
 
@@ -134,8 +128,8 @@ _poll_cache: dict[str, tuple[str, str]] = {}
 
 
 def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[tuple[str, str]],
-                     timeout: float, interval: float, progress=None) -> tuple[str, list[str]]:
-    d = _check(service, _post(service, path, body))
+                     timeout: float, interval: float, progress=None, post_timeout: float = 600) -> tuple[str, list[str]]:
+    d = _check(service, _post(service, path, body, post_timeout))
     tid = _task_id(d)
     urls = _urls(d)
     if urls and _status(d) not in {"pending", "processing", "queued"}:

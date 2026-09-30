@@ -21,7 +21,8 @@ DEFAULT_SETTINGS = {
     "kie_image_model": "google/nano-banana-edit",
     "video_model": "veo3_fast",
     "video_provider": "kie",                # kie | dubvoice
-    "dubvoice_image_model": "nano-banana-2",
+    "dubvoice_image_model": "nano-banana-pro",
+    "image_fallback": True,
     "dubvoice_video_model": "veo-3.1-fast",
     "stt_provider": "local",                # local (gratis) | elevenlabs
     "whisper_model": "small.en",

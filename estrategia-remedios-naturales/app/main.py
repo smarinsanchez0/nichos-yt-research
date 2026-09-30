@@ -78,6 +78,13 @@ def patch_settings(pid: str, body: dict = Body(...)):
     return {"ok": True}
 
 
+@app.post("/api/projects/{pid}/jobs/{name}/reset")
+def reset_job(pid: str, name: str):
+    P(pid)
+    jobs.force_reset(pid, name)
+    return {"ok": True}
+
+
 @app.get("/files/{pid}/{path:path}")
 def files(pid: str, path: str):
     base = store.pdir(pid).resolve()

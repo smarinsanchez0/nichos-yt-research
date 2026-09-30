@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 from .. import store
+from ..config import get_key
 from ..services import dubvoice, gemini, kie
 from .common import abs_path
 
@@ -16,14 +17,19 @@ RULES = ("Photorealistic vertical 9:16 photograph, shot like authentic smartphon
          "Do not add people that are not in the original frame.")
 
 
-def _compose_new(p: dict, s: dict, notes: str) -> tuple[str, list[tuple[str, object]]]:
+def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
+                 use_anchor: bool = True) -> tuple[str, list[tuple[str, object]]]:
     pid = p["id"]
     prof = (p["avatar"] or {}).get("profile") or {}
     refs = [("IMAGE 1 - THE AVATAR. This is the ONLY person allowed in the result: same face, hair, skin, age, body AND the same clothes/accessories:",
              abs_path(pid, p["avatar"]["file"])),
             ("IMAGE 2 - LAYOUT REFERENCE ONLY (camera framing, body pose, gesture, gaze, background, props, lighting). "
              "The person shown here is a DIFFERENT person and must NOT appear:", abs_path(pid, s["frame"]))]
-    anchor = next((o for o in p["scenes"] if o["idx"] != s["idx"] and (o.get("image") or {}).get("approved")), None)
+    anchor = None
+    if anchor_idx is not None and p["scenes"][anchor_idx].get("image"):
+        anchor = p["scenes"][anchor_idx]
+    elif use_anchor:
+        anchor = next((o for o in p["scenes"] if o["idx"] != s["idx"] and (o.get("image") or {}).get("approved")), None)
     extra = ""
     if anchor:
         refs.append(("IMAGE 3 - an approved frame of the SAME avatar (keep identity and outfit consistent; ignore its pose and background):",
@@ -53,18 +59,36 @@ def _compose_edit(p: dict, s: dict, notes: str) -> tuple[str, list[tuple[str, ob
     return prompt, refs
 
 
-def _call(p: dict, prompt: str, refs) -> bytes:
-    st = p["settings"]
-    if st["image_provider"] == "dubvoice":
+def _call_one(provider: str, st: dict, prompt: str, refs) -> bytes:
+    if provider == "dubvoice":
         labelled = prompt + "\nReferences in order: " + " | ".join(l for l, _ in refs)
         return dubvoice.image(labelled, [r for _, r in refs], model=st["dubvoice_image_model"])
-    if st["image_provider"] == "kie":
+    if provider == "kie":
         labelled = prompt + "\nReferences in order: " + " | ".join(l for l, _ in refs)
         return kie.nano_banana_edit(labelled, [r for _, r in refs], model=st["kie_image_model"])
     return gemini.generate_image(prompt, refs, st["image_model"])
 
 
-def generate(pid: str, idx: int, mode: str = "new", notes: str = "") -> None:
+def _call(p: dict, prompt: str, refs) -> tuple[bytes, str]:
+    """Proveedor elegido con 3 intentos; si falla, respaldo automatico en otro proveedor con key disponible."""
+    st = p["settings"]
+    main = st["image_provider"]
+    order = [main] + [x for x in ("google", "kie") if x != main and st.get("image_fallback", True) and get_key(x)]
+    last: Exception | None = None
+    for prov in order:
+        for attempt in range(2 if prov == main else 1):
+            try:
+                return _call_one(prov, st, prompt, refs), prov
+            except Exception as e:  # noqa: BLE001
+                last = e
+                if "creditos insuficientes" in str(e).lower() or "payment" in str(e).lower():
+                    break
+                time.sleep(4 * (attempt + 1))
+    raise RuntimeError(f"{last}")
+
+
+def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx: int | None = None,
+             use_anchor: bool = True) -> None:
     """mode: new (desde la escena original) | edit (retoque sobre la imagen actual)."""
     p = store.get(pid)
     s = p["scenes"][idx]
@@ -74,8 +98,18 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "") -> None:
         raise RuntimeError("La escena no tiene prompt; completa la Fase 2.")
     if mode == "edit" and not s.get("image"):
         mode = "new"
-    prompt, refs = (_compose_edit if mode == "edit" else _compose_new)(p, s, notes)
-    data = _call(p, prompt, refs)
+    with store.edit(pid) as q:
+        q["scenes"][idx].update(img_state="running", img_error=None, img_started=time.time())
+    try:
+        if mode == "edit":
+            prompt, refs = _compose_edit(p, s, notes)
+        else:
+            prompt, refs = _compose_new(p, s, notes, anchor_idx, use_anchor)
+        data, used = _call(p, prompt, refs)
+    except Exception as e:  # noqa: BLE001
+        with store.edit(pid) as q:
+            q["scenes"][idx].update(img_state="error", img_error=str(e)[:500])
+        raise
     im = Image.open(io.BytesIO(data)).convert("RGB")
     n = len(s.get("versions", [])) + 1
     out = store.path(pid, "images", f"s{idx:02d}_v{n}.jpg")
@@ -83,7 +117,8 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "") -> None:
     with store.edit(pid) as q:
         sc = q["scenes"][idx]
         v = {"file": store.rel(pid, out), "mode": mode, "notes": notes, "created": time.time(),
-             "w": im.width, "h": im.height}
+             "w": im.width, "h": im.height, "provider": used}
+        sc.update(img_state=None, img_error=None)
         sc.setdefault("versions", []).append(v)
         sc["image"] = {**v, "approved": False}
         sc.pop("image_url", None)
@@ -92,23 +127,35 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "") -> None:
 
 
 def generate_many(pid: str, prog, indices: list[int]) -> None:
+    """Genera las imagenes con consistencia: si no hay imagenes aprobadas, la primera se genera sola y las demas la usan
+    como referencia de apariencia. Cada imagen tiene reintentos, tiempo limite y respaldo; un fallo no frena a las demas."""
     total = len(indices)
     done = [0]
     errors: list[str] = []
+    p = store.get(pid)
+    has_approved = any((s.get("image") or {}).get("approved") for s in p["scenes"] if s["idx"] not in indices)
+    anchor = [None]
 
     def one(i: int):
         try:
-            generate(pid, i)
+            generate(pid, i, anchor_idx=anchor[0], use_anchor=has_approved)
         except Exception as e:  # noqa: BLE001
             errors.append(f"Escena {i + 1}: {e}")
         done[0] += 1
-        prog(f"Imagenes generadas {done[0]}/{total}", done[0] / total)
+        prog(f"Imagenes {done[0]}/{total} listas" + (f" ({len(errors)} con error)" if errors else ""), done[0] / total)
 
-    workers = 2 if store.get(pid)["settings"]["image_provider"] == "dubvoice" else 3   # DubVoice: max 3 en vuelo
+    rest = list(indices)
+    if not has_approved and len(rest) > 1:
+        first = rest.pop(0)
+        prog("Generando la primera imagen (referencia de consistencia)…", 0.02)
+        one(first)
+        if not errors:
+            anchor[0] = first
+    workers = 2 if p["settings"]["image_provider"] == "dubvoice" else 3   # DubVoice: max 3 en vuelo
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(one, indices))
+        list(ex.map(lambda i: (time.sleep(1.5), one(i)), rest))
     if errors:
-        raise RuntimeError(" | ".join(errors)[:900])
+        raise RuntimeError(" | ".join(errors)[:900] + " — pulsa 'Generar imagenes faltantes' para reintentar solo las que fallaron.")
 
 
 def set_approved(pid: str, idx: int, approved: bool) -> None:

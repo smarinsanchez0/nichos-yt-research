@@ -277,3 +277,18 @@ def test_dubvoice_retries_on_429(monkeypatch):
     monkeypatch.setattr(dubvoice, "download", lambda u: b"IMG")
     monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
     assert dubvoice.image("p", []) == b"IMG" and n["i"] == 3
+
+
+def test_image_fallback_when_dubvoice_fails(monkeypatch, tmp_path):
+    from app.phases import images
+    monkeypatch.setenv("GOOGLE_API_KEY", "g")
+    monkeypatch.setattr(images.time, "sleep", lambda s: None)
+
+    def boom(*a, **k): raise RuntimeError("DubVoice (imagen) tardo demasiado (timeout)")
+
+    monkeypatch.setattr(images.dubvoice, "image", boom)
+    monkeypatch.setattr(images.gemini, "generate_image", lambda *a, **k: b"OK")
+    p = {"settings": {"image_provider": "dubvoice", "image_fallback": True, "dubvoice_image_model": "nano-banana-pro",
+                      "image_model": "m", "kie_image_model": "k"}}
+    data, used = images._call(p, "prompt", [("l", tmp_path / "a.jpg")])
+    assert data == b"OK" and used == "google"

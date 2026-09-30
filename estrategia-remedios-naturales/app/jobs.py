@@ -82,3 +82,15 @@ def reset_stale() -> None:
                             c["error"] = "Interrumpido"
         except Exception:
             pass
+
+
+def force_reset(pid: str, name: str) -> None:
+    """Destraba una tarea que quedo colgada: la marca como interrumpida para poder lanzarla de nuevo."""
+    with _rlock:
+        _running.discard((pid, name))
+    with store.edit(pid) as p:
+        j = p["jobs"].setdefault(name, {})
+        j.update(status="error", error="Detenida manualmente. Puedes volver a lanzarla.", updated=time.time())
+        for s in p.get("scenes", []):
+            if s.get("img_state") == "running":
+                s["img_state"], s["img_error"] = "error", "Interrumpida"
