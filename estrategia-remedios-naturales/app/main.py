@@ -68,7 +68,7 @@ def delete_project(pid: str):
 @app.patch("/api/projects/{pid}/settings")
 def patch_settings(pid: str, body: dict = Body(...)):
     P(pid)
-    allowed = set(store.DEFAULT_SETTINGS)
+    allowed = set(store.DEFAULT_SETTINGS) - {"_v"}
     with store.edit(pid) as p:
         for k, v in body.items():
             if k in allowed:

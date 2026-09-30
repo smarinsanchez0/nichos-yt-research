@@ -23,7 +23,8 @@ DEFAULT_SETTINGS = {
     "video_provider": "kie",                # kie | dubvoice
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,
-    "scene_ref_mode": "blur",               # blur (recomendado) | none | full
+    "scene_ref_mode": "swap",               # swap (reemplaza a la persona conservando pose) | blur | none | full
+    "image_qa": True,                       # Claude revisa cada imagen y corrige hasta 2 veces
     "output_language": "es",                # idioma del video final: es | en
     "dubvoice_video_model": "veo-3.1-fast",
     "stt_provider": "local",                # local (gratis) | elevenlabs
@@ -41,6 +42,14 @@ DEFAULT_SETTINGS = {
     "sub_margin_v": 430,
     "sub_uppercase": True,
 }
+
+
+def _migrate(p: dict) -> None:
+    for k, v in DEFAULT_SETTINGS.items():
+        p["settings"].setdefault(k, v)
+    if p["settings"].get("_v", 0) < 2:          # v2: modo "swap" por defecto (conserva la pose del frame)
+        p["settings"]["scene_ref_mode"] = "swap"
+        p["settings"]["_v"] = 2
 
 
 def _lock(pid: str) -> threading.RLock:
@@ -88,8 +97,7 @@ def get(pid: str) -> dict:
         raise KeyError(pid)
     with _lock(pid):
         p = _read(pid)
-    for k, v in DEFAULT_SETTINGS.items():
-        p["settings"].setdefault(k, v)
+    _migrate(p)
     return p
 
 
@@ -98,8 +106,7 @@ def edit(pid: str):
     """Carga, cede el dict para mutarlo y guarda al salir (bloque corto, sin I/O de red)."""
     with _lock(pid):
         p = _read(pid)
-        for k, v in DEFAULT_SETTINGS.items():
-            p["settings"].setdefault(k, v)
+        _migrate(p)
         yield p
         _write(p)
 

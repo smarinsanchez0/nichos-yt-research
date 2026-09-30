@@ -10,7 +10,7 @@ from PIL import Image, ImageFilter
 
 from .. import store
 from ..config import get_key
-from ..services import dubvoice, gemini, kie
+from ..services import claude, dubvoice, gemini, kie
 from .common import abs_path
 
 RULES = ("Photorealistic vertical 9:16 photograph, shot like authentic smartphone/UGC content, real skin texture, natural "
@@ -42,11 +42,47 @@ def _action(s: dict) -> str:
     return (s.get("action") or r.get("person") or "").strip()
 
 
+def _compose_swap(p: dict, s: dict, notes: str, anchor_idx: int | None, use_anchor: bool):
+    """Edicion del frame original: se conserva la pose/manos/objetos EXACTOS y se reemplaza a la persona por el avatar."""
+    pid = p["id"]
+    prof = (p["avatar"] or {}).get("profile") or {}
+    refs = [("IMAGE 1 - ORIGINAL SCENE to edit (keep its exact composition, body pose, hands and fingers, gaze, expression, props, "
+             "graphics, background and lighting):", abs_path(pid, s["frame"])),
+            ("IMAGE 2 - THE AVATAR (identity and outfit reference):", abs_path(pid, p["avatar"]["file"]))]
+    anchor = None
+    if anchor_idx is not None and p["scenes"][anchor_idx].get("image"):
+        anchor = p["scenes"][anchor_idx]
+    elif use_anchor:
+        anchor = next((o for o in p["scenes"] if o["idx"] != s["idx"] and (o.get("image") or {}).get("approved")), None)
+    extra = ""
+    if anchor:
+        refs.append(("IMAGE 3 - an approved frame of the SAME avatar (identity and outfit consistency only; ignore its pose):",
+                     abs_path(pid, anchor["image"]["file"])))
+        extra = " IMAGE 3 shows the avatar's approved look: match it."
+    prompt = (
+        "EDIT IMAGE 1: replace the person in IMAGE 1 with the person from IMAGE 2 (the avatar).\n"
+        f"KEEP EXACTLY as in IMAGE 1 (mandatory): the action - {_action(s)} - the position of BOTH hands and every finger, arms, "
+        "posture, gaze direction, facial expression, camera framing, table/props/graphics and their positions, background and lighting. "
+        "The avatar must copy the gesture of the original person's hands. Do NOT use the pose of the avatar photo (for example crossed "
+        "arms or hands clasped); use the pose of IMAGE 1.\n"
+        "REPLACE COMPLETELY with the avatar from IMAGE 2: face, hairstyle, hair color, skin tone, age, facial hair, glasses, hat, body build "
+        f"and ALL clothing and accessories.{extra} The original person (their face, hair, glasses and every garment, including their shirt) "
+        "must not remain in any form.\n"
+        f"AVATAR (must match): {prof.get('description', '')}\n"
+        f"SCENE NOTES: {s.get('image_prompt', '')}\n"
+        f"GLOBAL STYLE NOTES: {p['settings'].get('global_notes') or '-'}\n"
+        "Remove any burned-in subtitles, captions or text overlays so the photo is clean.\n"
+        + (f"EXTRA CHANGES REQUESTED (apply them): {notes}\n" if notes else "") + RULES)
+    return prompt, refs
+
+
 def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
                  use_anchor: bool = True) -> tuple[str, list[tuple[str, object]]]:
     pid = p["id"]
     prof = (p["avatar"] or {}).get("profile") or {}
-    mode = p["settings"].get("scene_ref_mode", "blur")
+    mode = p["settings"].get("scene_ref_mode", "swap")
+    if mode == "swap":
+        return _compose_swap(p, s, notes, anchor_idx, use_anchor)
     refs = [("IMAGE 1 - THE AVATAR. This is the ONLY person allowed in the result: same face, hair, skin, age, body AND the same clothes/accessories:",
              abs_path(pid, p["avatar"]["file"]))]
     layout_line = ""
@@ -124,6 +160,33 @@ def _call(p: dict, prompt: str, refs) -> tuple[bytes, str, list[str]]:
     raise RuntimeError(" | ".join(errs[-3:]) or str(last))
 
 
+QA_PROMPT = """Compara 3 imagenes: (1) AVATAR de referencia, (2) ESCENA ORIGINAL, (3) IMAGEN GENERADA.
+La imagen generada debe mostrar a la MISMA persona del avatar (cara, pelo, edad, ropa y accesorios del avatar) haciendo la MISMA accion y
+pose que la escena original (manos, dedos, mirada, objetos/graficos). Devuelve JSON:
+{"same_person_as_avatar": bool, "same_outfit_as_avatar": bool, "is_copy_of_original_person": bool (true si se parece a la persona/ropa de la escena original en vez de al avatar),
+ "action_matches_original": bool, "differences": "que difiere en manos/pose/mirada/objetos, en español",
+ "fix": "instruccion correctiva concreta en INGLES para regenerar (que pose exacta de manos/mirada, que ropa del avatar, que objeto), maximo 2 frases"}"""
+
+
+def _qa(p: dict, s: dict, data: bytes) -> dict | None:
+    """Revision automatica con Claude (vision). Devuelve {ok, fix, differences} o None si no se pudo revisar."""
+    try:
+        pid = p["id"]
+        tmp = store.path(pid, "work", "qa", f"s{s['idx']:02d}.jpg")
+        Image.open(io.BytesIO(data)).convert("RGB").save(tmp, "JPEG", quality=88)
+        content = [{"type": "text", "text": "(1) AVATAR:"}, claude.image_block(abs_path(pid, p["avatar"]["file"]), 640),
+                   {"type": "text", "text": f"(2) ESCENA ORIGINAL (accion esperada: {_action(s)}):"},
+                   claude.image_block(abs_path(pid, s["frame"]), 640),
+                   {"type": "text", "text": "(3) IMAGEN GENERADA:"}, claude.image_block(tmp, 640),
+                   {"type": "text", "text": QA_PROMPT}]
+        r = claude.ask_json(content, model=p["settings"]["claude_model"], max_tokens=800)
+        ok = bool(r.get("same_person_as_avatar") and r.get("same_outfit_as_avatar") and r.get("action_matches_original")
+                  and not r.get("is_copy_of_original_person"))
+        return {"ok": ok, "fix": r.get("fix", ""), "differences": r.get("differences", "")}
+    except Exception:  # noqa: BLE001  - la revision es un extra: si falla, se conserva la imagen
+        return None
+
+
 def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx: int | None = None,
              use_anchor: bool = True) -> None:
     """mode: new (desde la escena original) | edit (retoque sobre la imagen actual)."""
@@ -137,12 +200,23 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx:
         mode = "new"
     with store.edit(pid) as q:
         q["scenes"][idx].update(img_state="running", img_error=None, img_started=time.time())
+    st = p["settings"]
+    tries = 3 if (st.get("image_qa", True) and mode == "new") else 1
+    fix, qa, data, used, errs = "", None, b"", "", []
     try:
-        if mode == "edit":
-            prompt, refs = _compose_edit(p, s, notes)
-        else:
-            prompt, refs = _compose_new(p, s, notes, anchor_idx, use_anchor)
-        data, used, errs = _call(p, prompt, refs)
+        for t in range(tries):
+            n_notes = (notes + " " + fix).strip()
+            if mode == "edit":
+                prompt, refs = _compose_edit(p, s, n_notes)
+            else:
+                prompt, refs = _compose_new(p, s, n_notes, anchor_idx, use_anchor)
+            data, used, errs = _call(p, prompt, refs)
+            if tries == 1:
+                break
+            qa = _qa(p, s, data)
+            if qa is None or qa.get("ok"):
+                break
+            fix = "CORRECTION FROM THE PREVIOUS ATTEMPT (mandatory): " + (qa.get("fix") or "")
     except Exception as e:  # noqa: BLE001
         with store.edit(pid) as q:
             q["scenes"][idx].update(img_state="error", img_error=str(e)[:500])
@@ -154,7 +228,7 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx:
     with store.edit(pid) as q:
         sc = q["scenes"][idx]
         v = {"file": store.rel(pid, out), "mode": mode, "notes": notes, "created": time.time(),
-             "w": im.width, "h": im.height, "provider": used, "errors": errs}
+             "w": im.width, "h": im.height, "provider": used, "errors": errs, "qa": qa}
         sc.update(img_state=None, img_error=None)
         sc.setdefault("versions", []).append(v)
         sc["image"] = {**v, "approved": False}

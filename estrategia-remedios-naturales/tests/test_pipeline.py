@@ -326,9 +326,33 @@ def test_image_prompt_leads_with_action(client):
     av = store.path(pid, "avatar", "a.jpg"); Image.new("RGB", (100, 100)).save(av)
     fr = store.path(pid, "frames", "f.jpg"); Image.new("RGB", (100, 180)).save(fr)
     p = {"id": pid, "avatar": {"file": store.rel(pid, av), "profile": {"description": "a woman in a blue dress"}},
-         "settings": {"scene_ref_mode": "blur", "global_notes": ""},
+         "settings": {"scene_ref_mode": "swap", "global_notes": ""},
          "scenes": [{"idx": 0, "frame": store.rel(pid, fr), "action": "Points at the lungs graphic with her right index finger",
                      "read": {"shot": "medium"}, "image_prompt": "x"}]}
     prompt, refs = images._compose_new(p, p["scenes"][0], "")
+    assert prompt.startswith("EDIT IMAGE 1") and "Points at the lungs graphic" in prompt      # modo swap (por defecto)
+    assert "ORIGINAL SCENE" in refs[0][0] and "AVATAR" in refs[1][0]
+    p["settings"]["scene_ref_mode"] = "blur"
+    prompt, refs = images._compose_new(p, p["scenes"][0], "")
     assert prompt.startswith("PRIMARY GOAL") and "Points at the lungs graphic" in prompt.split("\n")[0]
     assert "IMAGE 1" in refs[0][0] and "BLURRED" in refs[1][0]
+
+
+def test_qa_retries_until_avatar_and_action_ok(client, monkeypatch):
+    """Si la revision dice que no es el avatar / no hace la accion, regenera con la correccion (maximo 3 intentos)."""
+    from app.phases import images
+    from app import store
+    pid = client.post("/api/projects", json={"name": "qa"}).json()["id"]
+    av = store.path(pid, "avatar", "a.jpg"); Image.new("RGB", (100, 100)).save(av)
+    fr = store.path(pid, "frames", "f.jpg"); Image.new("RGB", (100, 180)).save(fr)
+    with store.edit(pid) as q:
+        q["avatar"] = {"file": store.rel(pid, av), "profile": {"description": "farmer with straw hat"}}
+        q["scenes"] = [{"idx": 0, "frame": store.rel(pid, fr), "action": "Points down", "read": {}, "image_prompt": "x"}]
+    seen = []
+    monkeypatch.setattr(images, "_call", lambda p, prompt, refs: (seen.append(prompt) or _jpg(), "google", []))
+    answers = iter([{"ok": False, "fix": "Hands must point at the lungs, not be crossed.", "differences": "manos cruzadas"},
+                    {"ok": True, "fix": "", "differences": ""}])
+    monkeypatch.setattr(images, "_qa", lambda p, s, data: next(answers))
+    images.generate(pid, 0)
+    assert len(seen) == 2 and "Hands must point at the lungs" in seen[1] and "CORRECTION" in seen[1]
+    assert store.get(pid)["scenes"][0]["image"]["qa"]["ok"] is True
