@@ -93,6 +93,10 @@ def _fuzzy(service: str) -> tuple[str, str] | None:
     return None
 
 
+def env(name: str) -> str | None:
+    return _lookup(name)
+
+
 def get_key(service: str) -> str | None:
     for name in KEY_ALIASES[service]:
         v = _lookup(name)

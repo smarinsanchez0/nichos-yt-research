@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from ..config import require_key
+from ..config import env, require_key
 from .http import fail, request
 
 URL = "https://api.anthropic.com/v1/messages"
@@ -38,9 +38,17 @@ def ask(content: list[dict] | str, *, system: str = "", model: str, max_tokens: 
         body["system"] = system
     if temperature is not None:
         body["temperature"] = temperature
-    r = request("POST", URL, json=body, timeout=600,
-                headers={"x-api-key": require_key("anthropic"), "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"})
+    headers = {"x-api-key": require_key("anthropic"), "anthropic-version": "2023-06-01",
+               "content-type": "application/json"}
+    ws = env("ANTHROPIC_WORKSPACE_ID")
+    if ws:  # necesario si la key no esta ligada a un workspace
+        headers["anthropic-workspace-id"] = ws
+    r = request("POST", URL, json=body, timeout=600, headers=headers)
+    if r.status_code == 400 and "workspace" in r.text and not ws:
+        raise RuntimeError(
+            "Tu key de Anthropic no esta ligada a un workspace. Solucion: agrega en ~/.zshrc la linea "
+            "`export ANTHROPIC_WORKSPACE_ID=wrkspc_...` (Console > Settings > Workspaces) o crea una key dentro de un "
+            "workspace, y reabre la app.")
     if r.status_code != 200:
         raise fail("Anthropic", r)
     return "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
