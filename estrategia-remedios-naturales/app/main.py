@@ -326,10 +326,22 @@ def regen_clip(pid: str, i: int, j: int, paid: bool = False):
     _need(0 <= i < len(p["scenes"]) and 0 <= j < len(p["scenes"][i].get("clips", [])), "Clip inexistente")
 
     def go(prog):
-        if paid:
-            video_jobs.reset_clip(pid, i, j, why="user_paid")
-        video_jobs.run_project(pid, [(i, j)], prog=prog, explicit=True)
+        video_jobs.run_project(pid, [(i, j)], prog=prog, explicit=True, paid=paid)
     return _start(pid, f"clip:{i}:{j}", go)
+
+
+@app.post("/api/projects/{pid}/videos/{i}/{j}/adopt")
+def adopt_clip(pid: str, i: int, j: int, body: dict = Body(default={})):
+    """Recupera SIN PAGAR un video que el proveedor ya genero (envio ambiguo). body: {"result_url": "https://…", "job_id": "…"} (al menos uno).
+    Exige evidencia (handle unico, duracion y huella visual contra el start frame); si no la hay, NO se asocia."""
+    p = P(pid)
+    _need(0 <= i < len(p["scenes"]) and 0 <= j < len(p["scenes"][i].get("clips", [])), "Clip inexistente")
+    url, jid = (body.get("result_url") or "").strip() or None, (body.get("job_id") or "").strip() or None
+    _need(bool(url or jid), "Indica result_url y/o job_id")
+    try:
+        return _start(pid, f"adopt:{i}:{j}", lambda prog: video_jobs.adopt_remote(pid, i, j, result_url=url, job_id=jid, prog=prog))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/projects/{pid}/f5/summary")

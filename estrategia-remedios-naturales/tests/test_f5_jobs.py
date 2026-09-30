@@ -164,7 +164,7 @@ def env(monkeypatch):
     monkeypatch.setenv("DUBVOICE_API_KEY", "d-test-key")
     vj.SCHED.reset_for_tests()
     vj._overrides.clear()
-    vj._overrides.update(poll_interval=0.05, submission_timeout=5, poll_request_timeout=2, processing_timeout=6, download_timeout=5,
+    vj._overrides.update(track_balance=False, reconcile_interval=0.05, reconcile_timeout=1.0, poll_interval=0.05, submission_timeout=5, poll_request_timeout=2, processing_timeout=6, download_timeout=5,
                          post_timeout=8, audit_timeout=8, claude_timeout=5, claude_qc_retries=1, contract_canary=False,
                          video_requests_per_minute=6000, max_concurrent_video_jobs=3, watchdog_margin=2)
     CLAUDE_CALLS.clear()
@@ -727,8 +727,11 @@ def test_H_restart_with_submitting_and_no_job_id_goes_to_review_with_zero_posts(
     assert f5["state"] == "NEEDS_REVIEW" and f5["review_reason"] == "AMBIGUOUS_SUBMIT" and f5["possible_duplicate"]
     res, _ = run(pid)
     assert dub.calls == [] and goog.calls == [] and f5_of(pid)["state"] == "NEEDS_REVIEW"
-    # ...y solo una accion EXPLICITA del usuario (Regenerar) decide pagar de nuevo
+    # Regenerar a secas (lo que hace el boton) tampoco paga: hay un envio dudoso
     res, _ = run(pid, keys=[(0, 0)], explicit=True)
+    assert dub.calls == [] and f5_of(pid)["state"] == "NEEDS_REVIEW"
+    # ...solo una decision EXPLICITA y consciente (paid=1) abre una ronda nueva pagada
+    res, _ = run(pid, keys=[(0, 0)], explicit=True, paid=True)
     assert len(dub.calls) == 1 and f5_of(pid)["state"] == "ACCEPTED" and f5_of(pid)["round"] == 2
 
 

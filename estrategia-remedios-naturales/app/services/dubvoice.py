@@ -13,7 +13,7 @@ from pathlib import Path
 from .. import store
 from ..config import DATA_DIR, require_key
 from . import errors
-from .errors import Cancelled as _Cancelled, ErrorType, F5Error
+from .errors import Cancelled as _Cancelled, ErrorType, F5Error, NotSupported
 from .http import download as http_download, fail, request, request_once, typed_error
 from .kie import download
 
@@ -242,7 +242,7 @@ def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str 
 PENDING_STATES = {"pending", "processing", "queued", "running", "in_progress", "in-progress", "generating", "waiting", "submitted", "created",
                   "starting", "started", "active"}
 CANDIDATES = [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")]
-DEFAULT_LIMITS = {"submission": 90, "poll_request": 20, "processing": 720, "download": 180, "download_retries": 3, "poll_interval": 8.0,
+DEFAULT_LIMITS = {"connect": 10, "submission": 300, "poll_request": 20, "processing": 720, "download": 180, "download_retries": 3, "poll_interval": 8.0,
                   "max_poll_failures": 8}
 _ID_KEYS = ("task_id", "taskId", "id", "job_id", "jobId", "generation_id")
 _KEEP_HEADERS = ("content-type", "retry-after", "x-request-id", "date")
@@ -312,6 +312,21 @@ class ContractRecorder:
             self._unknown.add(raw)
             self._write({"op": "UNRECOGNIZED_STATUS", "job_id": job_id, "raw_status": raw})
 
+    def observe(self, **info) -> None:
+        """Evidencia PARCIAL del contrato (p. ej. el POST es sincrono). Se guarda en `observed` pero NO marca verified=True."""
+        try:
+            import json
+            f = contract_file()
+            f.parent.mkdir(parents=True, exist_ok=True)
+            cur = json.loads(f.read_text()) if f.exists() else {"verified": False}
+            cur.setdefault("verified", False)
+            cur.setdefault("observed", {}).update(errors.sanitize(info))
+            cur["observed"]["last_seen"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            f.write_text(json.dumps(cur, ensure_ascii=False, indent=1))
+            self._write({"op": "CONTRACT_OBSERVED", **info})
+        except Exception:  # noqa: BLE001
+            pass
+
     def verified(self, **info) -> None:
         """Ciclo completo observado: se guarda el contrato para abrir la concurrencia."""
         try:
@@ -334,6 +349,7 @@ class _NullRecorder:
     def http(self, *a, **k): pass
     def note(self, *a, **k): pass
     def status_seen(self, *a, **k): pass
+    def observe(self, *a, **k): pass
     def verified(self, *a, **k): pass
 
 
@@ -370,7 +386,7 @@ def _veo_strict(body: dict, progress, cancel, on_submit, on_poll, limits, gate, 
         gate()
     t0 = time.time()
     try:
-        r = request_once("POST", url, json=body, headers=h, connect=10, read=min(60, lim["submission"]), deadline=lim["submission"], cancel=cancel)
+        r = request_once("POST", url, json=body, headers=h, connect=lim["connect"], read=lim["submission"], deadline=lim["submission"], cancel=cancel)
     except F5Error as e:
         e.provider = "dubvoice"
         rec.http("submit", "POST", url, shape, error=f"{e.etype.value} ambiguous={e.ambiguous} {e}", t0=t0)
@@ -390,8 +406,18 @@ def _veo_strict(body: dict, progress, cancel, on_submit, on_poll, limits, gate, 
     urls = _urls(d)
     if not tid:
         if urls and _status(d) in (DONE | {""}):
-            rec.note("submit_sync_result", note="respuesta sincrona con URL y sin job_id")
-            return "sync", _download_strict(urls, None, lim, gate, cancel, rec, lambda: [])
+            # POST SINCRONO: la respuesta ya trae el resultado. Se persiste un identificador sintetico + la URL ANTES de descargar
+            # (es el unico 'asa' de un video pagado; si la descarga falla se reintenta solo la descarga, jamas otro POST).
+            import hashlib
+            sid = "sync-" + hashlib.sha1(urls[0].split("?")[0].encode()).hexdigest()[:12]
+            rec.note("submit_sync_result", note="respuesta sincrona con URL y sin job_id", json_shape=errors.shape(j))
+            rec.observe(mode="sync_post", submit_response_shape=errors.shape(j), result_field=[k for k in ("video_url", "file_url", "url", "result", "output", "video") if k in d][:1])
+            if on_submit:
+                try:
+                    on_submit(sid, {"resolved_by": "sync_response", "result_url": urls[0]})
+                except Exception:  # noqa: BLE001
+                    pass
+            return sid, _download_strict(urls, sid, lim, gate, cancel, rec, lambda: [])
         raise F5Error(ErrorType.INVALID_RESPONSE, f"DubVoice (video) no devolvio id de tarea. Forma: {errors.shape(j)}", provider="dubvoice",
                       ambiguous=True, sub="no_job_id")
     rec.info.update(submit_id_field=id_field, submit_response_shape=errors.shape(j))
@@ -523,12 +549,43 @@ def _download_strict(urls: list[str], tid, lim: dict, gate, cancel, rec, refresh
 
 
 def resume(job_id: str, model: str | None = None, progress=None, cancel=None, on_poll=None, limits: dict | None = None, gate=None,
-           recorder=None) -> tuple[str, bytes]:
-    """RECONCILIACION: sondea un job YA existente y descarga su resultado. Jamas crea un job nuevo (cero POST de creacion)."""
+           recorder=None, result_url: str | None = None) -> tuple[str, bytes]:
+    """RECONCILIACION: descarga (si ya se conoce la URL) o sondea un job YA existente. Jamas crea un job nuevo (cero POST de creacion)."""
     lim = {**DEFAULT_LIMITS, **(limits or {})}
     rec = recorder or _NullRecorder()
-    rec.note("resume", job_id=job_id)
+    rec.note("resume", job_id=job_id, has_result_url=bool(result_url))
+    if result_url:
+        return job_id, _download_strict([result_url], job_id, lim, gate, cancel, rec, lambda: [])
+    if str(job_id).startswith(("sync-", "adopted-")):
+        raise F5Error(ErrorType.INVALID_RESPONSE, "Este job no tiene un task_id consultable (POST sincrono) y falta su URL de resultado", provider="dubvoice",
+                      job_id=job_id, sub="no_result_url")
     return job_id, _wait_and_download(job_id, None, lim, _h(), progress, cancel, on_poll, gate, rec, submitted_at=time.time())
+
+
+# ------------------------------------------------------------------ reconciliacion de un POST ambiguo / saldo
+def list_generations(*, since: float, until: float, model: str | None = None, limits: dict | None = None, gate=None, cancel=None,
+                     recorder=None) -> list[dict]:
+    """Generaciones de VIDEO recientes del usuario, normalizadas: {id, model, created_at, status, duration, result_url, prompt}.
+
+    La documentacion publica de DubVoice NO describe ningun endpoint para listar/buscar generaciones de video (solo `GET /api/v1/tts` lista
+    trabajos de TTS) ni acepta una clave de idempotencia / id de cliente. Por eso esto NO improvisa ninguna llamada: lanza NotSupported y
+    F5 deja el clip en NEEDS_REVIEW (recuperable a mano con la URL del panel: ver video_jobs.adopt_remote). Cuando se verifique un endpoint
+    real, se implementa aqui y NADA mas cambia."""
+    raise NotSupported("DubVoice no documenta un endpoint para listar/buscar generaciones de video: no se puede reconciliar automaticamente")
+
+
+def balance(limits: dict | None = None, cancel=None) -> int | None:
+    """Saldo de creditos (GET /api/v1/me, documentado como lectura gratuita). None si no se pudo leer. Nunca lanza."""
+    lim = {**DEFAULT_LIMITS, **(limits or {})}
+    try:
+        r = request_once("GET", f"{BASE}/api/v1/me", headers=_h(json_body=False), connect=lim["connect"], read=lim["poll_request"],
+                         deadline=lim["poll_request"], cancel=cancel)
+        if r.status_code != 200:
+            return None
+        v = _flat(r.json()).get("credits")
+        return int(v) if isinstance(v, (int, float)) else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ------------------------------------------------------------------ voces

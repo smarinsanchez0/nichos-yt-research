@@ -26,6 +26,10 @@ class Cancelled(RuntimeError):
     """El usuario (o el motor) cancelo la operacion. No es un error del proveedor."""
 
 
+class NotSupported(RuntimeError):
+    """El proveedor no ofrece (o aun no esta verificado) un mecanismo para esta operacion; jamas se improvisa una llamada."""
+
+
 class F5Error(RuntimeError):
     """Error tipado.
 

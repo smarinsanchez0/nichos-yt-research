@@ -106,13 +106,23 @@ def generate_raw(pid: str, si: int, ci: int, *, provider: str, model: str | None
 
 
 def resume_raw(provider: str, job_id: str, *, model: str | None = None, cancel=None, progress=None, on_poll=None,
-               limits: dict | None = None, gate=None, recorder=None) -> tuple[str, bytes]:
+               limits: dict | None = None, gate=None, recorder=None, result_url: str | None = None) -> tuple[str, bytes]:
     """Reconciliacion: sondea un job YA existente y descarga su resultado. NUNCA crea otro job (cero POST de creacion)."""
     fn = getattr(google_veo if provider == "google" else dubvoice, "resume", None)
     if fn is None:
         raise RuntimeError(f"{provider}: no se puede reanudar un job existente (resume no disponible)")
     return _call(fn, (job_id,), {"progress": progress, "cancel": cancel},
-                 {"model": model, "on_poll": on_poll, "limits": limits, "gate": gate, "recorder": recorder})
+                 {"model": model, "on_poll": on_poll, "limits": limits, "gate": gate, "recorder": recorder, "result_url": result_url})
+
+
+def list_candidates(provider: str, *, since: float, until: float, model: str | None = None, limits: dict | None = None, gate=None,
+                    cancel=None, recorder=None) -> list[dict]:
+    """Reconciliacion de un POST ambiguo: generaciones remotas recientes (SOLO LECTURA). NotSupported si el proveedor no lo ofrece."""
+    from ..services.errors import NotSupported
+    fn = getattr(dubvoice, "list_generations", None) if provider == "dubvoice" else None
+    if fn is None:
+        raise NotSupported(f"{provider}: no hay forma de listar generaciones para reconciliar un envio ambiguo")
+    return _call(fn, (), {"since": since, "until": until, "model": model}, {"limits": limits, "gate": gate, "cancel": cancel, "recorder": recorder})
 
 
 def finish_clip(pid: str, si: int, ci: int, raw) -> tuple:

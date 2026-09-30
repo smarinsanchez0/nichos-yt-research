@@ -46,7 +46,7 @@ def _find_uri(resp: dict) -> str | None:
     return None
 
 
-DEFAULT_LIMITS = {"submission": 90, "poll_request": 20, "processing": 720, "download": 180, "download_retries": 3, "poll_interval": 8.0,
+DEFAULT_LIMITS = {"connect": 10, "submission": 300, "poll_request": 20, "processing": 720, "download": 180, "download_retries": 3, "poll_interval": 8.0,
                   "max_poll_failures": 8}
 
 
@@ -74,7 +74,7 @@ def veo(prompt: str, image_path: Path, model: str = DEFAULT_MODEL, aspect: str =
         gate()
     t0 = time.time()
     try:
-        r = request_once("POST", url, json=body, headers=_h(), connect=10, read=min(60, lim["submission"]), deadline=lim["submission"], cancel=cancel)
+        r = request_once("POST", url, json=body, headers=_h(), connect=lim["connect"], read=lim["submission"], deadline=lim["submission"], cancel=cancel)
     except F5Error as e:
         e.provider = "google"
         if recorder:
