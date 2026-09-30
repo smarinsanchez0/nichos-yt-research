@@ -27,7 +27,7 @@ kie.upload_file = lambda p, mime='audio/mpeg', folder='': 'https://example.com/a
 dubvoice.voice_change = lambda url, vid, progress=None: T._mp3(8)
 gemini.generate_image = lambda prompt, refs, model, aspect="9:16": T._jpg()
 kie.upload_image = lambda p: "https://example.com/x.jpg"
-kie.veo_generate = lambda prompt, url, model="veo3_fast", aspect="9:16", progress=None, timeout=0: ("t", T.fake_video(prompt))
+dubvoice.veo = lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None: ("t", T.fake_video(prompt))
 
 if __name__ == "__main__":
     import uvicorn

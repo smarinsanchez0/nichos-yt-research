@@ -102,7 +102,7 @@ def client():
     dubvoice.voice_change = lambda url, vid, progress=None, audio_path=None: _mp3(8)
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": _jpg()
     kie.upload_image = lambda path: "https://example.com/x.jpg"
-    kie.veo_generate = lambda prompt, url, model="veo3_fast", aspect="9:16", progress=None, timeout=0: ("task1", fake_video(prompt))
+    dubvoice.veo = lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None: ("task1", fake_video(prompt))
     from app.main import app
     return TestClient(app)
 
@@ -203,7 +203,8 @@ def test_full_pipeline(client):
 
 def test_dubvoice_adapter(monkeypatch, tmp_path):
     """El adaptador de DubVoice envia refs en base64, sondea y descarga (HTTP simulado)."""
-    from app.services import dubvoice
+    import importlib
+    importlib.reload(dubvoice)   # el fixture del pipeline sustituyo funciones de este modulo
     monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
     img = tmp_path / "a.jpg"
     img.write_bytes(_jpg())
@@ -453,11 +454,12 @@ def test_omniflash_sends_duration(monkeypatch, tmp_path):
     assert "duration" not in sent
 
 
-def test_kie_veo_polling_progress_and_timeout(monkeypatch):
+def test_dubvoice_video_progress_and_timeout(monkeypatch, tmp_path):
     import importlib
-    importlib.reload(kie)
-    monkeypatch.setenv("KIE_API_KEY", "k")
-    msgs, polls = [], {"n": 0}
+    importlib.reload(dubvoice)
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+    img = tmp_path / "a.jpg"; img.write_bytes(_jpg())
+    msgs = []
 
     class R:
         status_code = 200
@@ -465,27 +467,13 @@ def test_kie_veo_polling_progress_and_timeout(monkeypatch):
         def __init__(self, j): self._j = j
         def json(self): return self._j
 
-    def fake(method, url, **kw):
-        if method == "POST":
-            return R({"code": 200, "data": {"taskId": "abcdef123456"}})
-        polls["n"] += 1
-        if polls["n"] < 3:
-            return R({"code": 200, "data": {"successFlag": 0}})
-        return R({"code": 200, "data": {"successFlag": 1, "response": {"resultUrls": ["https://x/v.mp4"]}}})
-
-    monkeypatch.setattr(kie, "request", fake)
-    monkeypatch.setattr(kie, "download", lambda u: b"VID")
-    monkeypatch.setattr(kie.time, "sleep", lambda s: None)
-    tid, data = kie.veo_generate("p", "https://img", progress=msgs.append)
-    assert data == b"VID" and any("generando" in m for m in msgs)
-
-    # nunca termina: debe fallar con el ultimo estado, no colgarse
-    clock = iter(range(0, 100000, 400))
-    monkeypatch.setattr(kie.time, "time", lambda: next(clock))
-    monkeypatch.setattr(kie, "request", lambda m, u, **k: R({"code": 200, "data": {"taskId": "t"}}) if m == "POST"
-                        else R({"code": 200, "data": {"successFlag": 0}}))
+    monkeypatch.setattr(dubvoice, "request", lambda m, u, **k: R({"task_id": "t"}) if m == "POST" else R({"status": "processing"}))
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    clock = iter(range(0, 100000, 200))
+    monkeypatch.setattr(dubvoice.time, "time", lambda: next(clock))
     try:
-        kie.veo_generate("p", "https://img", timeout=720)
-        assert False, "debio agotar el tiempo"
+        dubvoice.veo("p", img, progress=msgs.append, timeout=600)
+        assert False
     except RuntimeError as e:
-        assert "no termino" in str(e) and "successFlag" in str(e)
+        assert "no termino en 10 min" in str(e)
+    assert any("generando" in m for m in msgs)

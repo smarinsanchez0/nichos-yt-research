@@ -1,4 +1,4 @@
-"""Kie.ai: subida de imagenes, Nano Banana (opcional) y Veo 3.x para imagen->video."""
+"""Kie.ai: subida de archivos y Nano Banana (opcional). El video ya NO se genera aqui: se usa DubVoice."""
 from __future__ import annotations
 
 import base64
@@ -103,46 +103,6 @@ def nano_banana_edit(prompt: str, image_paths: list[Path], model: str = "google/
 
 
 # --------------------------------------------------------------- Veo (imagen -> video con audio)
-def veo_generate(prompt: str, image_url: str, model: str = "veo3_fast", aspect: str = "9:16",
-                 progress=None, timeout: float = 720) -> tuple[str, bytes]:
-    body = {"prompt": prompt, "imageUrls": [image_url], "model": model,
-            "generationType": "FIRST_AND_LAST_FRAMES_2_VIDEO", "aspectRatio": aspect,
-            "enableTranslation": False}
-    r = request("POST", f"{API}/api/v1/veo/generate", json=body, headers=_h())
-    tid = ((_check("Kie (Veo)", r).get("data") or {}).get("taskId"))
-    if not tid:
-        raise RuntimeError("Kie no devolvio taskId para el video")
-    t0 = time.time()
-    errors, last = 0, ""
-    while time.time() - t0 < timeout:
-        time.sleep(8)
-        el = int(time.time() - t0)
-        try:
-            g = request("GET", f"{API}/api/v1/veo/record-info", params={"taskId": tid}, headers=_h())
-            d = (_check("Kie (Veo)", g).get("data") or {})
-            errors = 0
-        except RuntimeError as e:          # error de red/API puntual: se tolera un par de veces
-            errors += 1
-            last = str(e)[:300]
-            if errors >= 4:
-                raise
-            continue
-        flag = d.get("successFlag")
-        last = json.dumps({k: d.get(k) for k in ("successFlag", "errorCode", "errorMessage", "response")}, ensure_ascii=False)[:500]
-        found = [u for u in _find_urls(d.get("response") or {}) if ".mp4" in u.lower()] or \
-                [u for u in _find_urls(d) if ".mp4" in u.lower()]
-        if flag == 1 or found:
-            if not found:
-                raise RuntimeError(f"Veo termino pero sin URL de video: {last}")
-            return tid, download(found[0])
-        if flag in (2, 3):
-            raise RuntimeError(f"Veo (Kie) fallo: {d.get('errorMessage') or d.get('errorCode') or last}")
-        if progress:
-            progress(f"Veo (Kie) generando… {el // 60}:{el % 60:02d} min (task {tid[:8]}, estado {flag})")
-    raise RuntimeError(f"Veo (Kie) no termino en {int(timeout // 60)} min (task {tid}). Ultimo estado: {last}. "
-                       "Revisa ese task en el panel de Kie.ai o prueba DubVoice como proveedor de video.")
-
-
 def upload_file(path: Path, mime: str = "audio/mpeg", folder: str = "ern/audio") -> str:
     """Sube un archivo (audio) a Kie y devuelve una URL publica temporal."""
     b64 = base64.b64encode(Path(path).read_bytes()).decode()

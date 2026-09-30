@@ -103,12 +103,22 @@ def _check(service: str, r):
         raise RuntimeError(f"{service}: respuesta no JSON: {r.text[:200]}")
 
 
-def _wait(get, service: str, timeout: float, interval: float) -> list[str]:
-    end = time.time() + timeout
-    while time.time() < end:
+def _wait(get, service: str, timeout: float, interval: float, progress=None) -> list[str]:
+    t0 = time.time()
+    last, errors = "", 0
+    while time.time() - t0 < timeout:
         time.sleep(interval)
-        d = get()
+        try:
+            d = get()
+            errors = 0
+        except RuntimeError as e:      # fallo puntual de red/API: se tolera un par de veces
+            errors += 1
+            last = str(e)[:250]
+            if errors >= 4:
+                raise
+            continue
         s = _status(d)
+        last = str({k: d.get(k) for k in ("status", "state", "progress", "error", "message") if k in d})[:300]
         if s in FAILED:
             raise RuntimeError(f"{service} fallo: {d.get('error') or d.get('message') or 'sin detalle'} (creditos reembolsados por DubVoice)")
         urls = _urls(d)
@@ -116,7 +126,10 @@ def _wait(get, service: str, timeout: float, interval: float) -> list[str]:
             return urls
         if s in DONE:
             raise RuntimeError(f"{service} termino sin URL de resultado: {str(d)[:300]}")
-    raise RuntimeError(f"{service} tardo demasiado (timeout)")
+        if progress:
+            el = int(time.time() - t0)
+            progress(f"{service} generando… {el // 60}:{el % 60:02d} min (estado: {s or 'en proceso'})")
+    raise RuntimeError(f"{service} no termino en {int(timeout // 60)} min. Ultimo estado: {last}")
 
 
 def image(prompt: str, refs: list[Path], model: str = "nano-banana-2", aspect: str = "9:16", progress=None) -> bytes:
@@ -154,7 +167,7 @@ def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[
             return _check(service, g)
         raise RuntimeError(f"{service}: no encontre la ruta para consultar la tarea (revisa /dashboard/api-docs).")
 
-    return tid, _wait(get, service, timeout, interval)
+    return tid, _wait(get, service, timeout, interval, progress)
 
 
 def tier_for(seconds: float, model: str = "omniflash") -> int:
@@ -174,7 +187,7 @@ def credits_for(model: str, seconds: float) -> int:
 
 
 def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str = "9:16",
-        resolution: str = "720p", progress=None, timeout: float = 1200, duration: float | None = None) -> tuple[str, bytes]:
+        resolution: str = "720p", progress=None, timeout: float = 600, duration: float | None = None) -> tuple[str, bytes]:
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect, "resolution": resolution,
             "ref_images": [data_uri(image_path, 1600)], "mode_image": "frame"}
     if model == "omniflash":

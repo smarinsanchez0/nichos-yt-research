@@ -37,18 +37,6 @@ def recommend(profile: dict | None, voices: list[dict]) -> list[dict]:
 
 
 # ----------------------------------------------------------------- clips
-def _image_url(pid: str, si: int) -> str:
-    p = store.get(pid)
-    s = p["scenes"][si]
-    cached = s.get("image_url")
-    if cached and cached.get("for") == s["image"]["file"]:
-        return cached["url"]
-    url = kie.upload_image(abs_path(pid, s["image"]["file"]))
-    with store.edit(pid) as q:
-        q["scenes"][si]["image_url"] = {"for": s["image"]["file"], "url": url}
-    return url
-
-
 def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
     p = store.get(pid)
     st = p["settings"]
@@ -60,11 +48,8 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
         c.update(status="running", error=None, warning=None)
     try:
         pg = (lambda m: prog(m)) if prog else None
-        if st.get("video_provider") == "dubvoice":
-            task, data = dubvoice.veo(clip["video_prompt"], abs_path(pid, p["scenes"][si]["image"]["file"]),
-                                      model=st["dubvoice_video_model"], progress=pg, duration=clip.get("target"))
-        else:
-            task, data = kie.veo_generate(clip["video_prompt"], _image_url(pid, si), model=st["video_model"], progress=pg)
+        task, data = dubvoice.veo(clip["video_prompt"], abs_path(pid, p["scenes"][si]["image"]["file"]),
+                                  model=st["dubvoice_video_model"], progress=pg, duration=clip.get("target"))
         raw = store.path(pid, "videos", f"s{si:02d}_c{ci}_raw.mp4")
         raw.write_bytes(data)
         final, warning = raw, None
@@ -89,8 +74,7 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
         with store.edit(pid) as q:
             c = q["scenes"][si]["clips"][ci]
             c.update(status="done", file=store.rel(pid, final), raw=store.rel(pid, raw), task_id=task,
-                     asked_seconds=(dubvoice.tier_for(clip.get("target") or 8, st["dubvoice_video_model"])
-                                    if st.get("video_provider") == "dubvoice" else 8),
+                     asked_seconds=dubvoice.tier_for(clip.get("target") or 8, st["dubvoice_video_model"]),
                      duration=info["duration"], stale=False, warning=warning, error=None)
     except Exception as e:  # noqa: BLE001
         with store.edit(pid) as q:
@@ -124,10 +108,10 @@ def estimate(p: dict) -> dict:
     for s in p["scenes"]:
         for c in s.get("clips", []):
             t = float(c.get("target") or 8)
-            secs = dubvoice.tier_for(t, model) if st.get("video_provider") == "dubvoice" else 8
-            cr = dubvoice.credits_for(model, t) if st.get("video_provider") == "dubvoice" else None
+            secs = dubvoice.tier_for(t, model)
+            cr = dubvoice.credits_for(model, t)
             rows.append({"scene": s["idx"], "clip": c["idx"], "needed": round(t, 1), "asked": secs, "credits": cr})
             total += cr or 0
             fixed += dubvoice.CREDITS.get("veo-3.1-fast", 7500)
     return {"clips": rows, "total_credits": total, "veo_fast_credits": fixed,
-            "variable": st.get("video_provider") == "dubvoice" and model == "omniflash"}
+            "variable": model == "omniflash"}

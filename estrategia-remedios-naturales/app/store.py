@@ -20,7 +20,7 @@ DEFAULT_SETTINGS = {
     "image_model": "gemini-2.5-flash-image",  # Nano Banana
     "kie_image_model": "google/nano-banana-edit",
     "video_model": "veo3_fast",
-    "video_provider": "kie",                # kie | dubvoice
+    "video_provider": "dubvoice",           # DubVoice es el proveedor oficial de video
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,
     "scene_ref_mode": "guide",              # guide (metodo de la guia, encadenado) | swap | blur | none | full
@@ -51,6 +51,11 @@ def _migrate(p: dict) -> None:
         p["settings"]["scene_ref_mode"] = "guide"
         p["settings"]["dubvoice_image_model"] = "nano-banana-pro"
         p["settings"]["_v"] = 3
+    if p["settings"].get("_v", 0) < 4:          # v4: DubVoice oficial para video
+        p["settings"]["video_provider"] = "dubvoice"
+        if p["settings"].get("dubvoice_video_model") not in ("veo-3.1-fast", "veo-3.1", "veo-3.1-lite", "omniflash", "meta"):
+            p["settings"]["dubvoice_video_model"] = "veo-3.1-fast"
+        p["settings"]["_v"] = 4
 
 
 def _lock(pid: str) -> threading.RLock:
