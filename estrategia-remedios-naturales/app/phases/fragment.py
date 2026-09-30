@@ -8,18 +8,19 @@ from .. import store
 from ..services import claude
 from .common import abs_path, assign_words
 
-MAX_SPEECH = 6.8   # s de habla por clip (Veo genera 8 s)
-MAX_WORDS = 22
+MAX_SPEECH = {"en": 6.8, "es": 5.6}   # s de habla (en el original) por clip; Veo genera 8 s y el español dura ~20% mas
+MAX_WORDS = {"en": 22, "es": 17}
 SUFFIX = ("Photorealistic, natural smartphone-style footage, the face, hair and outfit stay identical to the first frame, "
           "realistic lip-sync and natural body motion. No subtitles, no captions, no on-screen text, no watermark, no music.")
 
 
-def chunk_words(words: list[dict]) -> list[list[dict]]:
+def chunk_words(words: list[dict], lang: str = "en") -> list[list[dict]]:
     """Parte las palabras en trozos que caben en un clip, cortando en puntuacion cuando se puede."""
+    max_speech, max_words = MAX_SPEECH[lang], MAX_WORDS[lang]
     chunks, cur = [], []
     for w in words:
         cur.append(w)
-        if cur[-1]["end"] - cur[0]["start"] > MAX_SPEECH or len(cur) > MAX_WORDS:
+        if cur[-1]["end"] - cur[0]["start"] > max_speech or len(cur) > max_words:
             cut = None
             for j in range(len(cur) - 2, len(cur) // 2 - 1, -1):
                 if re.search(r"[.!?,;:…]$", cur[j]["text"]):
@@ -30,7 +31,7 @@ def chunk_words(words: list[dict]) -> list[list[dict]]:
             chunks.append(cur[:cut])
             cur = cur[cut:]
     if cur:
-        if chunks and len(cur) < 3 and cur[-1]["end"] - chunks[-1][0]["start"] <= MAX_SPEECH + 1.0:
+        if chunks and len(cur) < 3 and cur[-1]["end"] - chunks[-1][0]["start"] <= max_speech + 1.0:
             chunks[-1].extend(cur)
         else:
             chunks.append(cur)
@@ -40,8 +41,12 @@ def chunk_words(words: list[dict]) -> list[list[dict]]:
 def build_prompt(c: dict) -> str:
     parts = [c.get("camera", "").strip(), c.get("action_en", "").strip()]
     if c.get("dialogue"):
-        parts.append(f'The person speaks directly with a {c.get("delivery") or "warm, trustworthy"} American English voice and says: '
-                     f'"{c["dialogue"]}"')
+        if c.get("lang") == "es":
+            parts.append(f'The person speaks directly to the camera in Spanish, with a {c.get("delivery") or "warm, trustworthy"} '
+                         f'neutral Latin American Spanish voice, and says in Spanish: "{c["dialogue"]}"')
+        else:
+            parts.append(f'The person speaks directly with a {c.get("delivery") or "warm, trustworthy"} American English voice and says: '
+                         f'"{c["dialogue"]}"')
     else:
         parts.append("The person does not speak in this shot; only natural ambient sound.")
     parts.append(SUFFIX)
@@ -52,7 +57,8 @@ SYSTEM = """Eres director de video para Instagram Reels de venta (nicho remedios
 Escribes indicaciones para Veo 3 (imagen a video con voz). Recibes la imagen inicial de cada escena, lo que ocurre en el
 video ORIGINAL en esa escena y el dialogo exacto de cada clip. Tu trabajo: describir la ACCION y la camara de cada clip para que el
 avatar haga lo mismo que la persona original (gestos, mirada, objetos que muestra) y que la entrega del dialogo suene natural:
-educativa, cercana y persuasiva. No cambies el dialogo."""
+educativa, cercana y persuasiva. No cambies el dialogo. Cuando el video final es en español, ademas TRADUCES el dialogo de cada clip del ingles al español
+hablado natural (mismo significado y tono de venta, frases cortas, sin inventar promesas), con un largo similar para que quepa en ~7 segundos."""
 
 
 def run(pid: str, prog) -> None:
@@ -63,20 +69,22 @@ def run(pid: str, prog) -> None:
         raise RuntimeError("Completa la Fase 2 primero.")
     if not all((s.get("image") or {}).get("approved") for s in scenes):
         raise RuntimeError("Aprueba todas las imagenes de la Fase 3 antes de fragmentar.")
+    lang = p["settings"].get("output_language", "es")
     groups = assign_words(tr or [], scenes)
     plan = []          # por escena: lista de clips base
     for s, ws in zip(scenes, groups):
         dur = s["end"] - s["start"]
-        chunks = chunk_words(ws)
+        chunks = chunk_words(ws, lang)
         clips = []
         if not chunks:
-            clips.append({"dialogue": "", "t_start": s["start"], "t_end": s["end"], "target": min(dur, 8.0)})
+            clips.append({"dialogue": "", "dialogue_en": "", "lang": lang, "t_start": s["start"], "t_end": s["end"], "target": min(dur, 8.0)})
         for k, ch in enumerate(chunks):
             sp = ch[-1]["end"] - ch[0]["start"]
             target = sp + 0.7
             if len(chunks) == 1:
                 target = max(target, dur)
-            clips.append({"dialogue": " ".join(w["text"] for w in ch), "t_start": ch[0]["start"],
+            clips.append({"dialogue": " ".join(w["text"] for w in ch), "dialogue_en": " ".join(w["text"] for w in ch),
+                          "lang": lang, "t_start": ch[0]["start"],
                           "t_end": ch[-1]["end"], "words": [ws.index(ch[0]), ws.index(ch[-1])],
                           "target": round(min(target, 8.0), 2)})
         plan.append(clips)
@@ -93,12 +101,14 @@ def run(pid: str, prog) -> None:
             content.append({"type": "text", "text": f"Imagen inicial de la ESCENA {i + 1}:"})
             content.append(claude.image_block(abs_path(pid, s["image"]["file"]), max_side=512))
             items.append({"scene": i + 1, "original_scene": s["read"],
-                          "clips": [{"clip": k + 1, "dialogue": c["dialogue"]} for k, c in enumerate(plan[i])]})
+                          "clips": [{"clip": k + 1, "dialogue_en": c["dialogue_en"],
+                                     "max_words_es": min(24, int(len(c["dialogue_en"].split()) * 1.2) + 1)} for k, c in enumerate(plan[i])]})
         content.append({"type": "text", "text": (
             f"Voz/personaje: {json.dumps(profile.get('voice', {}), ensure_ascii=False)}. Notas globales: {p['settings'].get('global_notes') or '-'}\n"
             "Para CADA clip devuelve: "
             '{"scenes":[{"scene":<n>,"clips":[{"clip":<k>,"camera":"plano/movimiento de camara en ingles","action_en":"accion del avatar en ingles, concreta (mirada, gestos, objetos)",'
-            '"delivery":"tono de voz en 3-5 palabras en ingles","action_es":"accion en español, una frase"}]}]}\n\n'
+            '"delivery":"tono de voz en 3-5 palabras en ingles","action_es":"accion en español, una frase",'
+            '"dialogue_es":"traduccion al español hablado del dialogue_en (vacio si no hay dialogo), maximo max_words_es palabras"}]}]}\n\n'
             + json.dumps(items, ensure_ascii=False))})
         data = claude.ask_json(content, system=SYSTEM, model=p["settings"]["claude_model"], max_tokens=6000)
         by = {(int(x["scene"]), int(c["clip"])): c for x in data["scenes"] for c in x["clips"]}
@@ -109,6 +119,11 @@ def run(pid: str, prog) -> None:
                     raise RuntimeError(f"Falto el prompt del clip {k + 1} de la escena {i + 1}; reintenta.")
                 c.update(camera=r.get("camera", ""), action_en=r.get("action_en", ""), delivery=r.get("delivery", ""),
                          action_es=r.get("action_es", ""))
+                if lang == "es" and c["dialogue_en"]:
+                    es = (r.get("dialogue_es") or "").strip()
+                    if not es:
+                        raise RuntimeError(f"Falto la traduccion del clip {k + 1} de la escena {i + 1}; reintenta.")
+                    c["dialogue"] = es
                 c["video_prompt"] = build_prompt(c)
                 c.update(idx=k, status="pending", error=None, file=None, stale=False)
     with store.edit(pid) as q:

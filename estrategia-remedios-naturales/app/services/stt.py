@@ -30,4 +30,7 @@ def transcribe_local(audio: Path, language: str | None = "en", model_name: str =
 def transcribe(audio: Path, settings: dict, language_code: str | None = None) -> dict:
     if settings.get("stt_provider") == "elevenlabs":
         return eleven.transcribe(audio, language_code)
-    return transcribe_local(audio, language_code or "en", settings.get("whisper_model", "small.en"))
+    model = settings.get("whisper_model", "small.en")
+    if language_code and language_code != "en" and model.endswith(".en"):
+        model = model[:-3]          # los modelos ".en" solo entienden ingles: usar el multilingue
+    return transcribe_local(audio, language_code or "en", model)

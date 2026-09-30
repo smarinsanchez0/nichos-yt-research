@@ -8,7 +8,8 @@ from ..config import FONTS_DIR
 from ..services import claude, stt
 from .common import abs_path, norm
 
-FALLBACK_KEY = {"free", "secret", "natural", "pain", "never", "stop", "only", "hidden", "doctors", "toxic", "cure",
+FALLBACK_KEY = {"gratis", "secreto", "natural", "dolor", "nunca", "hoy", "ahora", "receta", "recetas", "libro", "remedio", "remedios",
+                "free", "secret", "natural", "pain", "never", "stop", "only", "hidden", "doctors", "toxic", "cure",
                 "remedy", "remedies", "fast", "today", "now", "proven", "recipe", "recipes", "book"}
 
 
@@ -17,10 +18,10 @@ def ass_time(t: float) -> str:
     return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
 
 
-def pick_keywords(text: str, model: str) -> set[str]:
+def pick_keywords(text: str, model: str, lang: str = "en") -> set[str]:
     try:
         data = claude.ask_json(
-            "Del siguiente guion de un Reel de venta (ingles), elige las PALABRAS CLAVE que conviene resaltar en amarillo en los "
+            f"Del siguiente guion de un Reel de venta ({'español' if lang == 'es' else 'ingles'}), elige las PALABRAS CLAVE que conviene resaltar en amarillo en los "
             "subtitulos: beneficios, ingredientes/remedios, cifras, emociones fuertes, llamada a la accion. Maximo 15% de las palabras. "
             'Devuelve {"keywords":["palabra", ...]} en minusculas, palabras sueltas.\n\n' + text,
             system="Eres editor de video experto en retencion en Instagram Reels.", model=model, max_tokens=1500)
@@ -122,11 +123,12 @@ def run(pid: str, prog) -> None:
 
     prog("Transcribiendo el audio final para los subtitulos exactos…", 0.7)
     audio = media.extract_audio(joined, work / "final_audio.mp3")
-    tr = stt.transcribe(audio, st, language_code="en")
+    lang = st.get("output_language", "es")
+    tr = stt.transcribe(audio, st, language_code=lang)
     expected = " ".join(c.get("dialogue", "") for _, _, c in ordered)
     ratio = overlap(expected, tr["text"])
     prog("Eligiendo palabras clave…", 0.78)
-    keywords = pick_keywords(tr["text"], st["claude_model"])
+    keywords = pick_keywords(tr["text"], st["claude_model"], lang)
     if not keywords:
         keywords = {norm(w["text"]) for w in tr["words"] if re.search(r"\d", w["text"]) or norm(w["text"]) in FALLBACK_KEY}
     ass = work / "subs.ass"

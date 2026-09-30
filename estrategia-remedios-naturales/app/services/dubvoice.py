@@ -163,7 +163,9 @@ def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str 
 
 # ------------------------------------------------------------------ voces
 def list_voices(gender: str | None = None, language: str = "en", n: int = 40) -> list[dict]:
-    params = {"provider": "elevenlabs", "language": language, "page_size": n}
+    params = {"provider": "elevenlabs", "page_size": n}
+    if language:
+        params["language"] = language
     if gender in ("male", "female"):
         params["gender"] = gender
     r = request("GET", f"{BASE}/api/v1/voices", params=params, headers=_h(), timeout=60)

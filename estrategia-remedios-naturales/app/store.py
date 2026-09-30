@@ -23,6 +23,8 @@ DEFAULT_SETTINGS = {
     "video_provider": "kie",                # kie | dubvoice
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,
+    "scene_ref_mode": "blur",               # blur (recomendado) | none | full
+    "output_language": "es",                # idioma del video final: es | en
     "dubvoice_video_model": "veo-3.1-fast",
     "stt_provider": "local",                # local (gratis) | elevenlabs
     "whisper_model": "small.en",

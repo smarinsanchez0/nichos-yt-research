@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import io
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from .. import store
 from ..config import get_key
@@ -17,14 +18,41 @@ RULES = ("Photorealistic vertical 9:16 photograph, shot like authentic smartphon
          "Do not add people that are not in the original frame.")
 
 
+def _layout_ref(pid: str, s: dict) -> Path:
+    """Version MUY difuminada del frame original: conserva encuadre, colores y donde esta la persona,
+    pero no deja ver cara ni ropa (asi la IA no puede copiar a la persona original)."""
+    im = Image.open(abs_path(pid, s["frame"])).convert("RGB")
+    w, h = im.size
+    small = im.resize((max(24, w // 14), max(40, h // 14)), Image.BILINEAR)
+    out = store.path(pid, "work", "layout", f"s{s['idx']:02d}.jpg")
+    small.resize((w, h), Image.BICUBIC).filter(ImageFilter.GaussianBlur(5)).save(out, "JPEG", quality=85)
+    return out
+
+
+def _scene_text(s: dict) -> str:
+    r = s.get("read") or {}
+    parts = [("SHOT", r.get("shot")), ("POSE / GESTURE / GAZE / EXPRESSION (only pose, not looks)", r.get("person")),
+             ("SETTING", r.get("setting")), ("PROPS", ", ".join(r.get("props") or []) if isinstance(r.get("props"), list) else r.get("props")),
+             ("LIGHTING", r.get("lighting"))]
+    return "\n".join(f"{k}: {v}" for k, v in parts if v)
+
+
 def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
                  use_anchor: bool = True) -> tuple[str, list[tuple[str, object]]]:
     pid = p["id"]
     prof = (p["avatar"] or {}).get("profile") or {}
+    mode = p["settings"].get("scene_ref_mode", "blur")
     refs = [("IMAGE 1 - THE AVATAR. This is the ONLY person allowed in the result: same face, hair, skin, age, body AND the same clothes/accessories:",
-             abs_path(pid, p["avatar"]["file"])),
-            ("IMAGE 2 - LAYOUT REFERENCE ONLY (camera framing, body pose, gesture, gaze, background, props, lighting). "
-             "The person shown here is a DIFFERENT person and must NOT appear:", abs_path(pid, s["frame"]))]
+             abs_path(pid, p["avatar"]["file"]))]
+    layout_line = ""
+    if mode == "full":
+        refs.append(("IMAGE 2 - LAYOUT REFERENCE ONLY (camera framing, body pose, gesture, gaze, background, props, lighting). "
+                     "The person shown here is a DIFFERENT person and must NOT appear:", abs_path(pid, s["frame"])))
+        layout_line = "Use IMAGE 2 for framing, pose, background, props and lighting."
+    elif mode == "blur":
+        refs.append(("IMAGE 2 - a VERY BLURRED layout guide. It only shows the framing, where the person stands, and the room colors and "
+                     "lighting. Ignore anything about the person in it; the person is the avatar from IMAGE 1:", _layout_ref(pid, s)))
+        layout_line = "Use IMAGE 2 only as a rough guide for framing, position and room colors; recreate the details from the SCENE DESCRIPTION."
     anchor = None
     if anchor_idx is not None and p["scenes"][anchor_idx].get("image"):
         anchor = p["scenes"][anchor_idx]
@@ -36,14 +64,13 @@ def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
                      abs_path(pid, anchor["image"]["file"])))
         extra = " IMAGE 3 shows the avatar's approved look: match it."
     prompt = (
-        "Create ONE new photo. Start from the person in IMAGE 1 (the avatar) and place THAT exact person in the scene of IMAGE 2.\n"
+        "Create ONE new photo of the person in IMAGE 1 (the avatar), placed in the scene described below.\n"
         "IDENTITY RULES (highest priority): the face, hairstyle, hair color, skin tone, facial hair, age, body build and the OUTFIT "
-        "(clothes, colors, accessories) must be taken from IMAGE 1 only. NEVER copy the face, hair, clothing, jewelry, glasses or "
-        "accessories of the person in IMAGE 2. If the person in IMAGE 2 wears something different from the avatar, dress the avatar "
-        "in the avatar's own outfit from IMAGE 1." + extra + "\n"
+        "(clothes, colors, accessories, glasses) must come from IMAGE 1 only. The scene may originally have had another person "
+        "(older/younger, different clothes): that person must NOT be reproduced in any way. Dress the avatar in its own outfit." + extra + "\n"
         f"AVATAR DESCRIPTION (must match): {prof.get('description', '')}\n"
-        "SCENE RULES: from IMAGE 2 reproduce only the camera angle and framing, the body pose, hand gestures, gaze direction, "
-        "facial expression, the room/background layout, props and lighting.\n"
+        f"{layout_line}\n"
+        f"SCENE (camera, pose, setting):\n{_scene_text(s)}\n"
         f"SCENE DESCRIPTION: {s.get('image_prompt', '')}\n"
         f"GLOBAL STYLE NOTES: {p['settings'].get('global_notes') or '-'}\n"
         + (f"EXTRA CHANGES REQUESTED BY THE DIRECTOR (apply them): {notes}\n" if notes else "") + RULES)
@@ -69,22 +96,24 @@ def _call_one(provider: str, st: dict, prompt: str, refs) -> bytes:
     return gemini.generate_image(prompt, refs, st["image_model"])
 
 
-def _call(p: dict, prompt: str, refs) -> tuple[bytes, str]:
+def _call(p: dict, prompt: str, refs) -> tuple[bytes, str, list[str]]:
     """Proveedor elegido con 3 intentos; si falla, respaldo automatico en otro proveedor con key disponible."""
     st = p["settings"]
     main = st["image_provider"]
     order = [main] + [x for x in ("google", "kie") if x != main and st.get("image_fallback", True) and get_key(x)]
     last: Exception | None = None
+    errs: list[str] = []
     for prov in order:
         for attempt in range(2 if prov == main else 1):
             try:
-                return _call_one(prov, st, prompt, refs), prov
+                return _call_one(prov, st, prompt, refs), prov, errs
             except Exception as e:  # noqa: BLE001
                 last = e
+                errs.append(f"{prov}: {str(e)[:220]}")
                 if "creditos insuficientes" in str(e).lower() or "payment" in str(e).lower():
                     break
                 time.sleep(4 * (attempt + 1))
-    raise RuntimeError(f"{last}")
+    raise RuntimeError(" | ".join(errs[-3:]) or str(last))
 
 
 def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx: int | None = None,
@@ -105,7 +134,7 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx:
             prompt, refs = _compose_edit(p, s, notes)
         else:
             prompt, refs = _compose_new(p, s, notes, anchor_idx, use_anchor)
-        data, used = _call(p, prompt, refs)
+        data, used, errs = _call(p, prompt, refs)
     except Exception as e:  # noqa: BLE001
         with store.edit(pid) as q:
             q["scenes"][idx].update(img_state="error", img_error=str(e)[:500])
@@ -117,7 +146,7 @@ def generate(pid: str, idx: int, mode: str = "new", notes: str = "", anchor_idx:
     with store.edit(pid) as q:
         sc = q["scenes"][idx]
         v = {"file": store.rel(pid, out), "mode": mode, "notes": notes, "created": time.time(),
-             "w": im.width, "h": im.height, "provider": used}
+             "w": im.width, "h": im.height, "provider": used, "errors": errs}
         sc.update(img_state=None, img_error=None)
         sc.setdefault("versions", []).append(v)
         sc["image"] = {**v, "approved": False}

@@ -69,7 +69,7 @@ def fake_ask_json(content, *, system="", model="", max_tokens=0):
             items = json.loads(txt.split("\n\n", 1)[1])
             return {"scenes": [{"scene": it["scene"], "clips": [
                 {"clip": c["clip"], "camera": "Medium shot.", "action_en": "Smiles and gestures.", "delivery": "warm",
-                 "action_es": "sonrie"} for c in it["clips"]]} for it in items]}
+                 "action_es": "sonrie", "dialogue_es": "ES " + c["dialogue_en"]} for c in it["clips"]]} for it in items]}
     raise AssertionError("prompt inesperado: " + str(content)[:200])
 
 
@@ -145,6 +145,7 @@ def test_full_pipeline(client):
     n = len(p["scenes"])
     # Fase 4 antes de aprobar imagenes debe fallar
     assert client.post(f"/api/projects/{pid}/fragment").status_code == 400
+    client.patch(f"/api/projects/{pid}/settings", json={"output_language": "en"})   # el flujo completo se prueba en ingles
     # Fase 3
     assert client.post(f"/api/projects/{pid}/images/generate").status_code == 200
     assert wait(client, pid, "images")["status"] == "done"
@@ -290,5 +291,28 @@ def test_image_fallback_when_dubvoice_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(images.gemini, "generate_image", lambda *a, **k: b"OK")
     p = {"settings": {"image_provider": "dubvoice", "image_fallback": True, "dubvoice_image_model": "nano-banana-pro",
                       "image_model": "m", "kie_image_model": "k"}}
-    data, used = images._call(p, "prompt", [("l", tmp_path / "a.jpg")])
-    assert data == b"OK" and used == "google"
+    data, used, errs = images._call(p, "prompt", [("l", tmp_path / "a.jpg")])
+    assert data == b"OK" and used == "google" and "dubvoice" in errs[0]
+
+
+def test_spanish_output_and_blurred_layout(client):
+    """Idioma final espanol: el dialogo del clip va en espanol y el frame de referencia va difuminado."""
+    from app.phases import fragment, images
+    from app import store
+    pid = client.post("/api/projects", json={"name": "es"}).json()["id"]
+    c = {"dialogue": "Hola a todos", "dialogue_en": "Hello everyone", "lang": "es", "camera": "Close-up.",
+         "action_en": "Smiles.", "delivery": "warm"}
+    assert "in Spanish" in fragment.build_prompt(c) and "Hola a todos" in fragment.build_prompt(c)
+    words = [{"text": f"w{i}", "start": i * 0.5, "end": i * 0.5 + 0.4} for i in range(40)]
+    assert all(len(ch) <= 17 for ch in fragment.chunk_words(words, "es"))
+    # capa difuminada: sin detalle fino (muy baja frecuencia)
+    src = store.path(pid, "frames", "f.jpg")
+    im = Image.new("RGB", (360, 640), (200, 200, 200))
+    for x in range(0, 360, 4):
+        for y in range(100, 200):
+            im.putpixel((x, y), (0, 0, 0))   # rayas finas simulan cara/ropa
+    im.save(src)
+    out = images._layout_ref(pid, {"idx": 0, "frame": store.rel(pid, src)})
+    px = Image.open(out).convert("L")
+    row = [px.getpixel((x, 150)) for x in range(100, 200)]
+    assert max(row) - min(row) < 60, "el frame de referencia debe quedar difuminado"

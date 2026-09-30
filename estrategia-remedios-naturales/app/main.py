@@ -259,7 +259,8 @@ def get_voices(pid: str):
         if p["settings"].get("voice_provider") == "elevenlabs":
             vs = eleven.list_voices()
         else:
-            vs = dubvoice.list_voices((prof.get("voice") or {}).get("gender"))
+            g, lg = (prof.get("voice") or {}).get("gender"), p["settings"].get("output_language", "es")
+            vs = dubvoice.list_voices(g, lg) or dubvoice.list_voices(g, "")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e))
     return {"voices": videos.recommend((p["avatar"] or {}).get("profile"), vs)[:40],
