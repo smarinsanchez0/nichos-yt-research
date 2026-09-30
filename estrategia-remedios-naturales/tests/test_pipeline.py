@@ -51,7 +51,7 @@ def fake_ask_json(content, *, system="", model="", max_tokens=0):
             return {"translations": [{"i": int(i), "es": "ES: " + t} for i, t in rows]}
         if content.startswith("Avatar:"):
             items = json.loads(content.split("ESCENAS:\n", 1)[1])
-            return {"scenes": [{"n": it["n"], "image_prompt": f"prompt img {it['n']}", "dialogue_es": "es"} for it in items]}
+            return {"scenes": [{"n": it["n"], "action": f"Points at the chest {it['n']}", "image_prompt": f"prompt img {it['n']}", "dialogue_es": "es"} for it in items]}
         if content.startswith("Del siguiente guion"):
             return {"keywords": ["ginger", "free", "three"]}
     else:
@@ -142,6 +142,7 @@ def test_full_pipeline(client):
     assert all(p["analysis"]["points"].values())
     assert len(p["scenes"]) >= 3, [(s["start"], s["end"]) for s in p["scenes"]]
     assert all(s["image_prompt"] and len(s["frames"]) == 3 for s in p["scenes"])
+    assert all(s["action"].startswith("Points") for s in p["scenes"])
     n = len(p["scenes"])
     # Fase 4 antes de aprobar imagenes debe fallar
     assert client.post(f"/api/projects/{pid}/fragment").status_code == 400
@@ -316,3 +317,18 @@ def test_spanish_output_and_blurred_layout(client):
     px = Image.open(out).convert("L")
     row = [px.getpixel((x, 150)) for x in range(100, 200)]
     assert max(row) - min(row) < 60, "el frame de referencia debe quedar difuminado"
+
+
+def test_image_prompt_leads_with_action(client):
+    from app.phases import images
+    from app import store
+    pid = client.post("/api/projects", json={"name": "act"}).json()["id"]
+    av = store.path(pid, "avatar", "a.jpg"); Image.new("RGB", (100, 100)).save(av)
+    fr = store.path(pid, "frames", "f.jpg"); Image.new("RGB", (100, 180)).save(fr)
+    p = {"id": pid, "avatar": {"file": store.rel(pid, av), "profile": {"description": "a woman in a blue dress"}},
+         "settings": {"scene_ref_mode": "blur", "global_notes": ""},
+         "scenes": [{"idx": 0, "frame": store.rel(pid, fr), "action": "Points at the lungs graphic with her right index finger",
+                     "read": {"shot": "medium"}, "image_prompt": "x"}]}
+    prompt, refs = images._compose_new(p, p["scenes"][0], "")
+    assert prompt.startswith("PRIMARY GOAL") and "Points at the lungs graphic" in prompt.split("\n")[0]
+    assert "IMAGE 1" in refs[0][0] and "BLURRED" in refs[1][0]

@@ -64,7 +64,7 @@ Devuelve JSON: {{"scenes":[{{
  "shot": "tipo de plano y angulo de camara (ej. medium close-up, eye level, handheld selfie style), encuadre vertical 9:16",
  "person": "SOLO la pose: posicion del cuerpo, hacia donde mira, expresion facial, gestos de manos, que sostiene o senala. PROHIBIDO describir ropa, cabello, edad, genero, rasgos fisicos o accesorios de la persona (sera reemplazada por otra)",
  "setting": "lugar y decorado con detalle (cocina, muebles, colores, bandera de EE.UU. si aparece y donde exactamente)",
- "props": ["objetos relevantes: frascos, plantas, ingredientes, libro, texto en pantalla..."],
+ "props": ["objetos relevantes: frascos, plantas, ingredientes, libro, texto en pantalla... INCLUYE graficos o ilustraciones superpuestos o sobre el cuerpo (ej. pulmones transparentes sobre el pecho, con su posicion y color exactos) y con cual mano/dedo interactua la persona"],
  "on_screen_text": "texto visible o vacio",
  "lighting": "iluminacion y paleta de color",
  "motion": "que accion ocurre entre el frame inicial y el final",
@@ -131,7 +131,11 @@ person from the reference photo'. Describe con precision: tipo de plano y angulo
 expresion, posicion de manos y objetos, decorado con todos los detalles (cocina estadounidense, bandera, plantas, frascos...),
 iluminacion. REGLA CLAVE: la persona original sera reemplazada por el avatar, asi que NUNCA describas su ropa, cabello, edad,
 genero, joyas, lentes ni rasgos fisicos (ignora esos datos si aparecen en la lectura de la escena); escribe siempre 'the person from
-the reference photo, wearing their own outfit from the reference photo'. Estilo: fotografia 100% realista, natural, tipo contenido de iPhone/UGC, piel con textura real, sin aspecto de
+the reference photo, wearing their own outfit from the reference photo'.
+EL PROMPT DEBE ORDENAR LA ACCION: el campo "action" es lo mas importante. Es 1-2 frases en ingles que empiezan con un verbo y dicen
+EXACTAMENTE lo que hace el avatar en el frame: que hace cada mano y dedo, hacia donde mira, la expresion, la postura, y como interactua
+con los objetos o graficos (ej. 'Points with the right index finger at the translucent lungs graphic on the chest while looking down at
+it with a concerned expression'). Usa el genero del avatar. "image_prompt" debe EMPEZAR con esa accion y luego dar plano, decorado y luz. Estilo: fotografia 100% realista, natural, tipo contenido de iPhone/UGC, piel con textura real, sin aspecto de
 render ni de IA. Formato vertical 9:16. Maximo 140 palabras por prompt, en ingles."""
 
 
@@ -146,9 +150,9 @@ def _step_prompts(pid, prog):
         prog(f"Redactando prompts de imagen ({a + 1}-{a + len(batch)} de {len(scenes)})…", 0.1 + 0.85 * a / len(scenes))
         items = [{"n": s["idx"] + 1, "read": s["read"], "dialogue_en": s["dialogue_en"]} for s in batch]
         data = claude.ask_json(
-            f"Avatar: {avatar.get('description', '(sin descripcion)')}\nNotas globales del usuario: {notes or '-'}\n\n"
+            f"Avatar: {avatar.get('description', '(sin descripcion)')} (genero: {avatar.get('gender', '?')})\nNotas globales del usuario: {notes or '-'}\n\n"
             "Para cada escena devuelve "
-            '{"scenes":[{"n":<n>,"image_prompt":"...","dialogue_es":"traduccion al español del dialogue_en de esa escena (vacio si no hay dialogo)"}]}\n\n'
+            '{"scenes":[{"n":<n>,"action":"...","image_prompt":"...","dialogue_es":"traduccion al español del dialogue_en de esa escena (vacio si no hay dialogo)"}]}\n\n'
             + "ESCENAS:\n" + __import__("json").dumps(items, ensure_ascii=False),
             system=PROMPTS_SYS, model=_model(p), max_tokens=6000)
         by_n = {int(x["n"]): x for x in data["scenes"]}
@@ -158,6 +162,8 @@ def _step_prompts(pid, prog):
                 if not x:
                     raise RuntimeError(f"Falto el prompt de la escena {s['idx'] + 1}; reintenta.")
                 q["scenes"][s["idx"]]["image_prompt"] = x["image_prompt"]
+                if not q["scenes"][s["idx"]].get("action_edited"):
+                    q["scenes"][s["idx"]]["action"] = x.get("action", "")
                 q["scenes"][s["idx"]]["dialogue_es"] = x.get("dialogue_es", "")
     with store.edit(pid) as q:
         q["analysis"]["points"]["prompts"] = True

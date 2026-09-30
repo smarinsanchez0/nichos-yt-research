@@ -168,9 +168,11 @@ def patch_scene(pid: str, i: int, body: dict = Body(...)):
     P(pid)
     with store.edit(pid) as p:
         _need(0 <= i < len(p["scenes"]), "Escena inexistente")
-        for k in ("image_prompt", "dialogue_es", "dialogue_en"):
+        for k in ("image_prompt", "dialogue_es", "dialogue_en", "action"):
             if k in body:
                 p["scenes"][i][k] = body[k]
+                if k == "action":
+                    p["scenes"][i]["action_edited"] = True
     return {"ok": True}
 
 

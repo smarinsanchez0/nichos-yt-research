@@ -37,6 +37,11 @@ def _scene_text(s: dict) -> str:
     return "\n".join(f"{k}: {v}" for k, v in parts if v)
 
 
+def _action(s: dict) -> str:
+    r = s.get("read") or {}
+    return (s.get("action") or r.get("person") or "").strip()
+
+
 def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
                  use_anchor: bool = True) -> tuple[str, list[tuple[str, object]]]:
     pid = p["id"]
@@ -64,7 +69,10 @@ def _compose_new(p: dict, s: dict, notes: str, anchor_idx: int | None = None,
                      abs_path(pid, anchor["image"]["file"])))
         extra = " IMAGE 3 shows the avatar's approved look: match it."
     prompt = (
-        "Create ONE new photo of the person in IMAGE 1 (the avatar), placed in the scene described below.\n"
+        "PRIMARY GOAL: the person in IMAGE 1 (the avatar) performs THIS ACTION exactly, as clearly visible as in the original scene: "
+        f"{_action(s)}\n"
+        "Create ONE new photo of that avatar doing it, in the scene described below. The action, hand positions, gaze and interaction "
+        "with props/graphics are mandatory and must be unmistakable.\n"
         "IDENTITY RULES (highest priority): the face, hairstyle, hair color, skin tone, facial hair, age, body build and the OUTFIT "
         "(clothes, colors, accessories, glasses) must come from IMAGE 1 only. The scene may originally have had another person "
         "(older/younger, different clothes): that person must NOT be reproduced in any way. Dress the avatar in its own outfit." + extra + "\n"
