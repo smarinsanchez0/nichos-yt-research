@@ -7,6 +7,12 @@ Replica un video (Reel 9:16, en inglés) con tu avatar de IA, escena por escena,
 ```
 Requisitos: Python 3.10+. ffmpeg (`brew install ffmpeg`; si no está, se usa el de `imageio-ffmpeg`).
 
+## App para Mac (con logo)
+```bash
+bash mac/instalar_mac.sh     # crea "ESTRATEGIA REMEDIOS NATURALES.app" en /Applications
+```
+Doble clic para abrir (arrástrala al Dock). La primera vez instala dependencias (2-3 min). Cerrar la app (Cmd+Q en el Dock) apaga el servidor. Logs: `~/Library/Logs/EstrategiaRemediosNaturales.log`. Si mueves la carpeta del proyecto, vuelve a ejecutar el instalador.
+
 ## API keys
 Se importan solas de `~/.zshrc` (también `.zprofile`, `.zshenv`, `.bashrc`, `.env`). Nombres aceptados:
 `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `KIE_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`, `PEXELS_API_KEY`, `DUBVOICE_API_KEY`.
