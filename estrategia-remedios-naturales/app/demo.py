@@ -86,7 +86,9 @@ def fake_ask_json(content, *, system="", model="", max_tokens=0):
         if txt.startswith("Compara 3 imagenes"):
             return {"same_person_as_avatar": True, "same_outfit_as_avatar": True, "is_copy_of_original_person": False,
                     "action_matches_original": True, "differences": "", "fix": ""}
-        if txt.startswith("ESTADO"):            # supervisor: acepta todo lo pendiente, reintenta lo fallido
+        if txt.startswith("QC VISUAL"):         # Fase 5: control de calidad visual (Claude)
+            return {"visual_ok": True, "reasons": [], "prompt_fix": ""}
+        if txt.startswith("ESTADO"):            # supervisor heredado: acepta todo lo pendiente, reintenta lo fallido
             state = json.loads(txt.split("\n", 1)[1].split("\n\nEVENTOS")[0])
             acts = [{"do": "retry", "scene": r["scene"], "clip": r["clip"], "reason": "error"} for r in state if r["state"] == "failed"]
             pend = txt.split("CLIPS PENDIENTES DE TU REVISION")[1].split("\n")[0]
@@ -126,7 +128,15 @@ def install() -> None:
     dubvoice.image = lambda prompt, refs, model="nano-banana-2", aspect="9:16", progress=None: jpg()
     dubvoice.tts = lambda text, voice_id, language="auto", progress=None: mp3(4)
     dubvoice.edge_tts = lambda text, voice="x": mp3(4)
-    google_veo.veo = (lambda prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None,
-                      timeout=0, cancel=None: ("google-task", fake_video(prompt)))
-    dubvoice.veo = (lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None,
-                    timeout=0, duration=None, cancel=None: ("demo-task", fake_video(prompt)))
+    def _g(prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None, timeout=0, cancel=None,
+           on_submit=None, **kw):
+        if on_submit:
+            on_submit("google-task")
+        return "google-task", fake_video(prompt)
+
+    def _d(prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None,
+           cancel=None, on_submit=None, **kw):
+        if on_submit:
+            on_submit("demo-task")
+        return "demo-task", fake_video(prompt)
+    google_veo.veo, dubvoice.veo = _g, _d

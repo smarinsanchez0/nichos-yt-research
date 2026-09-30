@@ -1,7 +1,7 @@
 """FASE 5: generacion de los clips de video (Veo via Kie.ai) + voz unificada (ElevenLabs)."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import inspect
 
 from .. import media, store
 from ..services import dubvoice, eleven, google_veo, kie
@@ -71,10 +71,59 @@ def retry_voice(pid: str, si: int, ci: int) -> str | None:
     with store.edit(pid) as q:
         c = q["scenes"][si]["clips"][ci]
         c.update(file=store.rel(pid, final), warning=warning, duration=media.probe(final)["duration"])
+        if isinstance(c.get("f5"), dict):        # el audio se repara SIN regenerar el video (F5: audio_state independiente del visual)
+            c["f5"]["audio_state"] = "NEEDS_FIX" if warning else "OK"
+            c["f5"]["audio_issue"] = warning
     return warning
 
 
+def _call(fn, args: tuple, kw: dict, extras: dict):
+    """Llama al proveedor pasando los parametros nuevos de F5 (on_submit, limits, ...) SOLO si la funcion los acepta."""
+    try:
+        params = inspect.signature(fn).parameters
+        var_kw = any(p.kind == p.VAR_KEYWORD for p in params.values())
+    except (TypeError, ValueError):
+        params, var_kw = {}, True
+    ok = {k: v for k, v in extras.items() if v is not None and (var_kw or k in params)}
+    return fn(*args, **kw, **ok)
+
+
+def default_model(st: dict, provider: str) -> str:
+    return (st.get("google_video_model") or google_veo.DEFAULT_MODEL) if provider == "google" else st["dubvoice_video_model"]
+
+
+def generate_raw(pid: str, si: int, ci: int, *, provider: str, model: str | None, prompt: str, duration: float | None,
+                 cancel=None, progress=None, on_submit=None, on_poll=None, limits: dict | None = None, gate=None,
+                 recorder=None) -> tuple[str, bytes]:
+    """A + B de la Fase 5: ENVIAR → SONDEAR → DESCARGAR. Devuelve (job_id, bytes del MP4). No toca voz ni auditoria:
+    en cuanto esta funcion vuelve, el slot de generacion puede liberarse."""
+    p = store.get(pid)
+    img = abs_path(pid, p["scenes"][si]["image"]["file"])
+    model = model or default_model(p["settings"], provider)
+    fn = google_veo.veo if provider == "google" else dubvoice.veo
+    return _call(fn, (prompt, img), {"model": model, "progress": progress, "duration": duration, "cancel": cancel},
+                 {"on_submit": on_submit, "on_poll": on_poll, "limits": limits, "gate": gate, "recorder": recorder})
+
+
+def resume_raw(provider: str, job_id: str, *, model: str | None = None, cancel=None, progress=None, on_poll=None,
+               limits: dict | None = None, gate=None, recorder=None) -> tuple[str, bytes]:
+    """Reconciliacion: sondea un job YA existente y descarga su resultado. NUNCA crea otro job (cero POST de creacion)."""
+    fn = getattr(google_veo if provider == "google" else dubvoice, "resume", None)
+    if fn is None:
+        raise RuntimeError(f"{provider}: no se puede reanudar un job existente (resume no disponible)")
+    return _call(fn, (job_id,), {"progress": progress, "cancel": cancel},
+                 {"model": model, "on_poll": on_poll, "limits": limits, "gate": gate, "recorder": recorder})
+
+
+def finish_clip(pid: str, si: int, ci: int, raw) -> tuple:
+    """C de la Fase 5: unifica la voz (si esta activado). Devuelve (archivo_final, aviso). Ante cualquier fallo devuelve el RAW
+    y un aviso: el RAW pagado nunca se pierde ni obliga a regenerar el video."""
+    p = store.get(pid)
+    return _unify(pid, si, ci, raw, p["settings"], p["scenes"][si]["clips"][ci])
+
+
 def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: dict | None = None) -> None:
+    """Camino heredado y sincrono (A+B+C en una llamada, sin maquina de estados). F5 usa video_jobs; esto queda para uso manual."""
     ov = overrides or {}
     p = store.get(pid)
     st = p["settings"]
@@ -82,7 +131,7 @@ def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: d
     if not (p["scenes"][si].get("image") or {}).get("approved"):
         raise RuntimeError(f"La imagen de la escena {si + 1} no esta aprobada.")
     provider = ov.get("provider") or "dubvoice"
-    model = ov.get("model") or (st.get("google_video_model") or google_veo.DEFAULT_MODEL if provider == "google" else st["dubvoice_video_model"])
+    model = ov.get("model") or default_model(st, provider)
     duration = ov.get("duration") or clip.get("target")
     prompt = ov.get("prompt") or clip["video_prompt"]
     with store.edit(pid) as q:
@@ -92,11 +141,7 @@ def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: d
             c["video_prompt"] = ov["prompt"]
     try:
         pg = (lambda m: prog(m)) if prog else None
-        img = abs_path(pid, p["scenes"][si]["image"]["file"])
-        if provider == "google":
-            task, data = google_veo.veo(prompt, img, model=model, progress=pg, duration=duration, cancel=cancel)
-        else:
-            task, data = dubvoice.veo(prompt, img, model=model, progress=pg, duration=duration, cancel=cancel)
+        task, data = generate_raw(pid, si, ci, provider=provider, model=model, prompt=prompt, duration=duration, cancel=cancel, progress=pg)
         raw = store.path(pid, "videos", f"s{si:02d}_c{ci}_raw.mp4")
         raw.write_bytes(data)
         final, warning = _unify(pid, si, ci, raw, st, clip)
@@ -145,6 +190,10 @@ def make_still_clip(pid: str, si: int, ci: int) -> None:
             status="done", file=store.rel(pid, out), raw=store.rel(pid, out), duration=media.probe(out)["duration"], stale=False,
             provider_used="still", verified=True, error=None,
             warning="Locucion sobre imagen fija (no se pudo generar el video de este clip). Regeneralo cuando haya proveedor disponible.")
+        cl = q["scenes"][si]["clips"][ci]
+        if isinstance(cl.get("f5"), dict):        # OPT-IN explicito del usuario (nunca fallback automatico): queda registrado como tal
+            cl["f5"].update(state="ACCEPTED", visual_state="OK_STILL_IMAGE", accepted_via="still_image_optin", review_reason=None,
+                            review_kind=None, review_message=None)
 
 
 def salvage_all(pid: str, prog) -> None:
@@ -155,22 +204,10 @@ def salvage_all(pid: str, prog) -> None:
         make_still_clip(pid, si, ci)
 
 
-def render_many(pid: str, prog, pairs: list[tuple[int, int]]) -> None:
-    done = [0]
-    errors: list[str] = []
-
-    def one(pair):
-        try:
-            render_clip(pid, *pair)
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"Escena {pair[0] + 1} clip {pair[1] + 1}: {e}")
-        done[0] += 1
-        prog(f"Clips listos {done[0]}/{len(pairs)}", done[0] / len(pairs))
-
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        list(ex.map(one, pairs))
-    if errors:
-        raise RuntimeError(" | ".join(errors)[:900])
+def render_many(pid: str, prog, pairs: list[tuple[int, int]], explicit: bool = False) -> None:
+    """Punto de entrada manual: delega en el planificador unico de F5 (video_jobs). No crea hilos propios."""
+    from . import video_jobs
+    video_jobs.run_project(pid, pairs, prog=prog, explicit=explicit)
 
 
 def estimate(p: dict) -> dict:

@@ -8,7 +8,9 @@ import time
 from pathlib import Path
 
 from ..config import require_key
-from .http import fail, request
+from . import errors
+from .errors import Cancelled, ErrorType, F5Error
+from .http import download as http_download, fail, request, request_once, typed_error
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = "veo-3.1-fast-generate-preview"
@@ -44,7 +46,156 @@ def _find_uri(resp: dict) -> str | None:
     return None
 
 
+DEFAULT_LIMITS = {"submission": 90, "poll_request": 20, "processing": 720, "download": 180, "download_retries": 3, "poll_interval": 8.0,
+                  "max_poll_failures": 8}
+
+
+def _sleep(seconds: float, cancel) -> None:
+    end = time.time() + seconds
+    while time.time() < end:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("Cancelado")
+        time.sleep(min(0.25, max(end - time.time(), 0.01)))
+
+
 def veo(prompt: str, image_path: Path, model: str = DEFAULT_MODEL, aspect: str = "9:16", duration: float | None = 8,
+        resolution: str = "720p", progress=None, timeout: float = 600, cancel=None, on_submit=None, on_poll=None,
+        limits: dict | None = None, gate=None, recorder=None) -> tuple[str, bytes]:
+    """Sin `limits`: comportamiento heredado. Con `limits` (Fase 5): timeouts reales, cero reintentos internos, errores tipados y el
+    nombre de la operacion entregado en `on_submit` en cuanto existe (permite reconciliar con `resume`)."""
+    if limits is None:
+        return _veo_legacy(prompt, image_path, model, aspect, duration, resolution, progress, timeout, cancel)
+    lim = {**DEFAULT_LIMITS, **limits}
+    dur = pick_duration(duration)
+    body = {"instances": [{"prompt": prompt, "image": _image_part(image_path)}],
+            "parameters": {"aspectRatio": aspect, "durationSeconds": dur, "resolution": resolution}}
+    url = f"{BASE}/models/{model}:predictLongRunning"
+    if gate:
+        gate()
+    t0 = time.time()
+    try:
+        r = request_once("POST", url, json=body, headers=_h(), connect=10, read=min(60, lim["submission"]), deadline=lim["submission"], cancel=cancel)
+    except F5Error as e:
+        e.provider = "google"
+        if recorder:
+            recorder.http("submit", "POST", url, {"durationSeconds": dur, "model": model}, error=f"{e.etype.value} ambiguous={e.ambiguous} {e}", t0=t0)
+        raise
+    if recorder:
+        recorder.http("submit", "POST", url, {"durationSeconds": dur, "model": model}, resp=r, t0=t0)
+    if r.status_code != 200:
+        err = typed_error("Google Veo", r, "google")
+        if r.status_code in (502, 504):
+            err.ambiguous = True
+        raise err
+    try:
+        name = r.json().get("name")
+    except Exception:  # noqa: BLE001
+        name = None
+    if not name:
+        raise F5Error(ErrorType.INVALID_RESPONSE, "Google Veo no devolvio operacion", provider="google", ambiguous=True, sub="no_job_id")
+    if on_submit:
+        try:
+            on_submit(name, {"resolved_by": "name"})
+        except Exception:  # noqa: BLE001
+            pass
+    return name, _poll_and_download(name, lim, progress, cancel, on_poll, gate, recorder, time.time())
+
+
+def resume(job_id: str, model: str | None = None, progress=None, cancel=None, on_poll=None, limits: dict | None = None, gate=None,
+           recorder=None) -> tuple[str, bytes]:
+    """RECONCILIACION por operation ID: consulta la operacion existente y descarga el video. Nunca crea otra generacion."""
+    lim = {**DEFAULT_LIMITS, **(limits or {})}
+    return job_id, _poll_and_download(job_id, lim, progress, cancel, on_poll, gate, recorder, time.time())
+
+
+def _poll_and_download(name: str, lim: dict, progress, cancel, on_poll, gate, rec, started: float) -> bytes:
+    deadline = started + lim["processing"]
+    fails = polls = 0
+    last = ""
+    while True:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("Cancelado")
+        if time.time() > deadline:
+            raise F5Error(ErrorType.PROVIDER_TIMEOUT, f"Google Veo no termino en {int(lim['processing'] // 60)} min. Ultimo estado: {last}",
+                          provider="google", job_id=name)
+        _sleep(lim["poll_interval"], cancel)
+        if gate:
+            gate()
+        t0 = time.time()
+        try:
+            g = request_once("GET", f"{BASE}/{name}", headers=_h(), connect=10, read=lim["poll_request"], deadline=lim["poll_request"], cancel=cancel)
+        except F5Error as e:
+            fails += 1
+            last = f"{e.etype.value}: {str(e)[:120]}"
+            if rec:
+                rec.http("poll", "GET", f"{BASE}/{name}", None, error=last, t0=t0, n=polls + 1)
+            if fails >= lim["max_poll_failures"]:
+                raise F5Error(ErrorType.CONNECTION_ERROR, f"Google Veo: {fails} sondeos seguidos fallaron ({last})", provider="google", job_id=name,
+                              sub="poll_failures")
+            continue
+        if rec:
+            rec.http("poll", "GET", f"{BASE}/{name}", None, resp=g, t0=t0, n=polls + 1)
+        if g.status_code != 200:
+            err = typed_error("Google Veo (estado)", g, "google")
+            err.job_id = name
+            if g.status_code == 404:
+                err.etype, err.sub = ErrorType.INVALID_RESPONSE, "operation_not_found"
+                raise err
+            if err.fatal:
+                raise err
+            fails += 1
+            last = f"{err.etype.value}: {str(err)[:120]}"
+            if err.etype == ErrorType.RATE_LIMIT and err.retry_after:
+                _sleep(min(err.retry_after, 60), cancel)
+            if fails >= lim["max_poll_failures"]:
+                raise F5Error(ErrorType.CONNECTION_ERROR, f"Google Veo: {fails} sondeos seguidos fallaron ({last})", provider="google", job_id=name,
+                              sub="poll_failures")
+            continue
+        fails = 0
+        polls += 1
+        try:
+            j = g.json()
+        except Exception:  # noqa: BLE001
+            raise F5Error(ErrorType.INVALID_RESPONSE, "Google Veo (estado): respuesta no JSON", provider="google", job_id=name, sub="poll_not_json")
+        if on_poll:
+            try:
+                on_poll(polls, "done" if j.get("done") else "processing")
+            except Exception:  # noqa: BLE001
+                pass
+        if j.get("done"):
+            if j.get("error"):
+                msg = f"Google Veo fallo: {str(j['error'])[:300]}"
+                et = errors.classify(msg)
+                et = et if et in (ErrorType.CONTENT_FILTER, ErrorType.PROVIDER_REJECTED) else ErrorType.PROVIDER_REJECTED
+                raise F5Error(et, msg, provider="google", job_id=name, sub=errors.sub_of(msg) or "provider_failed", fatal=False)
+            resp = j.get("response") or {}
+            uri = _find_uri(resp)
+            if not uri:
+                reasons = (resp.get("generateVideoResponse") or {}).get("raiMediaFilteredReasons")
+                raise F5Error(ErrorType.CONTENT_FILTER, f"Google Veo no entrego video (filtro de seguridad: {reasons or 'sin detalle'})",
+                              provider="google", job_id=name, sub="provider_failed")
+            return _download(uri, name, lim, cancel, rec)
+        if progress:
+            el = int(time.time() - started)
+            progress(f"Google Veo generando… {el // 60}:{el % 60:02d} min")
+
+
+def _download(uri: str, name: str, lim: dict, cancel, rec) -> bytes:
+    last = None
+    for i in range(max(int(lim["download_retries"]), 1)):
+        if i:
+            _sleep(2 * i, cancel)
+        try:
+            data = http_download(uri, headers={"x-goog-api-key": require_key("google")}, deadline=lim["download"], cancel=cancel)
+            if rec:
+                rec.note("download", bytes=len(data), attempt=i + 1) if hasattr(rec, "note") else None
+            return data
+        except F5Error as e:
+            last = e
+    raise F5Error(ErrorType.DOWNLOAD_ERROR, f"Google Veo: no se pudo descargar el video ({last})", provider="google", job_id=name)
+
+
+def _veo_legacy(prompt: str, image_path: Path, model: str = DEFAULT_MODEL, aspect: str = "9:16", duration: float | None = 8,
         resolution: str = "720p", progress=None, timeout: float = 600, cancel=None) -> tuple[str, bytes]:
     dur = pick_duration(duration)
     body = {"instances": [{"prompt": prompt, "image": _image_part(image_path)}],

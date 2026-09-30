@@ -80,6 +80,9 @@ def reset_stale() -> None:
                         if c.get("status") == "running":
                             c["status"] = "error"
                             c["error"] = "Interrumpido"
+                # Fase 5: un envio a medias o un job en curso NO se reenvia solo (doble cobro): se marca para reconciliar / revisar
+                from .phases import video_jobs
+                video_jobs.recover_after_restart(p, active=set())
         except Exception:
             pass
 

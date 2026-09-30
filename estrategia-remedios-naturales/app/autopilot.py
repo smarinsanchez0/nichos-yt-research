@@ -161,7 +161,11 @@ def run_full(video: Path, avatar_img: Path, *, name: str | None = None, lang: st
     clips_ok = all(c.get("status") == "done" and not c.get("stale") for s in store.get(pid)["scenes"] for c in s["clips"])
     if not clips_ok:
         log("🎬 FASE 5 · Generacion de clips con el supervisor Claude…")
-        supervisor.start(pid, _prog(log, "F5"))
+        res = supervisor.start(pid, _prog(log, "F5"))
+        if res and res.get("state") == "COMPLETED_WITH_WARNINGS":
+            rv = "; ".join(f"escena {x['scene']} clip {x['clip']} [{x['reason']}]" for x in res.get("needs_review_list", []))
+            raise RuntimeError(f"Fase 5 terminó con advertencias: {len(res.get('needs_review_list', []))} clip(s) requieren revisión ({rv}). "
+                               "El video final no se arma con clips faltantes: revísalos y vuelve a lanzar.")
     # FASE 6
     log("🎞️ FASE 6 · Edicion final (recorte de silencios, subtitulos, audio)…")
     _retry(lambda: editing.run(pid, _prog(log, "F6")), 2, log, "Edicion final")

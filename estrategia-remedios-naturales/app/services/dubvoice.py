@@ -10,8 +10,11 @@ import io
 import time
 from pathlib import Path
 
-from ..config import require_key
-from .http import fail, request
+from .. import store
+from ..config import DATA_DIR, require_key
+from . import errors
+from .errors import Cancelled as _Cancelled, ErrorType, F5Error
+from .http import download as http_download, fail, request, request_once, typed_error
 from .kie import download
 
 BASE = "https://www.dubvoice.ai"
@@ -93,8 +96,7 @@ def _throttle(cancel=None) -> None:
         _last_post[0] = time.time()
 
 
-class Cancelled(RuntimeError):
-    pass
+Cancelled = _Cancelled          # una sola clase de cancelacion para toda la Fase 5
 
 
 def _post(service: str, path: str, body: dict, timeout: float = 600, auth: str = "bearer", cancel=None):
@@ -220,15 +222,313 @@ def credits_for(model: str, seconds: float) -> int:
 
 def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str = "9:16",
         resolution: str = "720p", progress=None, timeout: float = 600, duration: float | None = None,
-        cancel=None) -> tuple[str, bytes]:
+        cancel=None, on_submit=None, on_poll=None, limits: dict | None = None, gate=None, recorder=None) -> tuple[str, bytes]:
+    """Imagen → video. Sin `limits` se comporta como siempre (camino heredado/manual). Con `limits` (Fase 5) usa el camino ESTRICTO:
+    timeouts reales por fase, cero reintentos internos, errores tipados, job_id entregado en `on_submit` en cuanto existe y
+    registro sanitizado del contrato en `recorder`."""
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect, "resolution": resolution,
             "ref_images": [data_uri(image_path, 1280)], "mode_image": "frame"}
     if model == "omniflash":
         body["duration"] = tier_for(duration or 8, model)
-    tid, urls = _submit_and_wait("DubVoice (video)", "/api/v1/video", body,
-                                 [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")],
-                                 timeout, 8, progress, cancel=cancel)
-    return tid, download(urls[0])
+    if limits is None:
+        tid, urls = _submit_and_wait("DubVoice (video)", "/api/v1/video", body,
+                                     [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")],
+                                     timeout, 8, progress, cancel=cancel)
+        return tid, download(urls[0])
+    return _veo_strict(body, progress, cancel, on_submit, on_poll, limits, gate, recorder)
+
+
+# ==================================================================== Fase 5: camino estricto + contrato observable
+PENDING_STATES = {"pending", "processing", "queued", "running", "in_progress", "in-progress", "generating", "waiting", "submitted", "created",
+                  "starting", "started", "active"}
+CANDIDATES = [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")]
+DEFAULT_LIMITS = {"submission": 90, "poll_request": 20, "processing": 720, "download": 180, "download_retries": 3, "poll_interval": 8.0,
+                  "max_poll_failures": 8}
+_ID_KEYS = ("task_id", "taskId", "id", "job_id", "jobId", "generation_id")
+_KEEP_HEADERS = ("content-type", "retry-after", "x-request-id", "date")
+
+
+def contract_file() -> Path:
+    return DATA_DIR / "contracts" / "dubvoice.json"
+
+
+def contract_verified() -> bool:
+    """¿Ya se observo un ciclo real completo (POST → job_id → sondeo → estados → URL → descarga)?"""
+    try:
+        import json
+        return bool(json.loads(contract_file().read_text()).get("verified"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class ContractRecorder:
+    """Registra, SANITIZADO, lo que DubVoice realmente responde (status HTTP, forma del JSON, job_id, endpoint de sondeo, estados reales,
+    URL final sin firma, tiempos) en data/projects/<id>/f5_contract.jsonl. Nunca escribe claves, headers de peticion, tokens ni base64."""
+
+    def __init__(self, pid: str, provider: str = "dubvoice", si: int = 0, ci: int = 0, att_id: str = "?", on_verified=None):
+        self.pid, self.provider, self.si, self.ci, self.att = pid, provider, si, ci, att_id
+        self.on_verified = on_verified
+        self.t0 = time.time()
+        self.statuses: list[tuple[float, str]] = []
+        self.info: dict = {}
+        self._unknown: set[str] = set()
+
+    def _write(self, rec: dict) -> None:
+        try:
+            import json
+            base = {"ts": round(time.time(), 3), "provider": self.provider, "scene": self.si, "clip": self.ci, "attempt": self.att,
+                    "t_rel": round(time.time() - self.t0, 2)}
+            with open(store.path(self.pid, "f5_contract.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(errors.sanitize({**base, **rec}), ensure_ascii=False, default=str) + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def http(self, op: str, method: str, url: str, req_shape=None, resp=None, error: str | None = None, t0: float | None = None, **extra) -> None:
+        rec = {"op": op, "method": method, "url": errors.scrub(url, 300), "request_shape": req_shape,
+               "elapsed_ms": int((time.time() - t0) * 1000) if t0 else None}
+        rec.update(extra)
+        if error:
+            rec["error"] = errors.scrub(error, 300)
+        if resp is not None:
+            rec["http_status"] = resp.status_code
+            rec["headers"] = {k: v for k, v in resp.headers.items()
+                              if k.lower() in _KEEP_HEADERS or k.lower().startswith(("x-ratelimit", "ratelimit", "x-rate"))}
+            try:
+                j = resp.json()
+                rec["json_shape"] = errors.shape(j)
+                rec["body"] = j
+            except Exception:  # noqa: BLE001
+                rec["body_text"] = (getattr(resp, "text", "") or "")[:300]
+        self._write(rec)
+
+    def note(self, kind: str, **data) -> None:
+        self._write({"op": kind, **data})
+
+    def status_seen(self, job_id: str, raw: str, normalized: str) -> None:
+        if not self.statuses or self.statuses[-1][1] != raw:
+            self.statuses.append((round(time.time() - self.t0, 1), raw))
+            self._write({"op": "status_transition", "job_id": job_id, "raw_status": raw, "normalized": normalized})
+        if normalized == "unrecognized" and raw not in self._unknown:
+            self._unknown.add(raw)
+            self._write({"op": "UNRECOGNIZED_STATUS", "job_id": job_id, "raw_status": raw})
+
+    def verified(self, **info) -> None:
+        """Ciclo completo observado: se guarda el contrato para abrir la concurrencia."""
+        try:
+            import json
+            f = contract_file()
+            f.parent.mkdir(parents=True, exist_ok=True)
+            rec = {"verified": True, "verified_at": time.strftime("%Y-%m-%d %H:%M:%S"), "statuses_seen": [s for _, s in self.statuses],
+                   **self.info, **info}
+            f.write_text(json.dumps(errors.sanitize(rec), ensure_ascii=False, indent=1))
+            self._write({"op": "CONTRACT_VERIFIED", **rec})
+            if self.on_verified:
+                self.on_verified(rec)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class _NullRecorder:
+    info: dict = {}
+
+    def http(self, *a, **k): pass
+    def note(self, *a, **k): pass
+    def status_seen(self, *a, **k): pass
+    def verified(self, *a, **k): pass
+
+
+def _sleep(seconds: float, cancel) -> None:
+    end = time.time() + seconds
+    while time.time() < end:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("Cancelado")
+        time.sleep(min(0.25, max(end - time.time(), 0.01)))
+
+
+def _id_and_key(j) -> tuple[str | None, str | None]:
+    """job_id y el NOMBRE del campo por el que se resolvio (top-level o dentro de 'data')."""
+    if not isinstance(j, dict):
+        return None, None
+    for k in _ID_KEYS:
+        if j.get(k):
+            return str(j[k]), k
+    if isinstance(j.get("data"), dict):
+        for k in _ID_KEYS:
+            if j["data"].get(k):
+                return str(j["data"][k]), f"data.{k}"
+    return None, None
+
+
+def _veo_strict(body: dict, progress, cancel, on_submit, on_poll, limits, gate, recorder) -> tuple[str, bytes]:
+    lim = {**DEFAULT_LIMITS, **limits}
+    rec = recorder or _NullRecorder()
+    h = _h()
+    url = f"{BASE}/api/v1/video"
+    shape = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 80 else ("<list>" if isinstance(v, list) else v)) for k, v in body.items()}
+    # ---- 1) ENVIO (un solo POST, sin reintentos internos)
+    if gate:
+        gate()
+    t0 = time.time()
+    try:
+        r = request_once("POST", url, json=body, headers=h, connect=10, read=min(60, lim["submission"]), deadline=lim["submission"], cancel=cancel)
+    except F5Error as e:
+        e.provider = "dubvoice"
+        rec.http("submit", "POST", url, shape, error=f"{e.etype.value} ambiguous={e.ambiguous} {e}", t0=t0)
+        raise
+    rec.http("submit", "POST", url, shape, resp=r, t0=t0)
+    if r.status_code not in (200, 201, 202):
+        err = typed_error("DubVoice (video)", r, "dubvoice")
+        if r.status_code in (502, 504):          # el proxy pudo cortar DESPUES de crear el job
+            err.ambiguous = True
+        raise err
+    try:
+        j = r.json()
+    except Exception:  # noqa: BLE001
+        raise F5Error(ErrorType.INVALID_RESPONSE, "DubVoice (video): la respuesta 2xx no es JSON", provider="dubvoice", ambiguous=True, sub="not_json")
+    d = _flat(j)
+    tid, id_field = _id_and_key(j)
+    urls = _urls(d)
+    if not tid:
+        if urls and _status(d) in (DONE | {""}):
+            rec.note("submit_sync_result", note="respuesta sincrona con URL y sin job_id")
+            return "sync", _download_strict(urls, None, lim, gate, cancel, rec, lambda: [])
+        raise F5Error(ErrorType.INVALID_RESPONSE, f"DubVoice (video) no devolvio id de tarea. Forma: {errors.shape(j)}", provider="dubvoice",
+                      ambiguous=True, sub="no_job_id")
+    rec.info.update(submit_id_field=id_field, submit_response_shape=errors.shape(j))
+    if on_submit:
+        try:
+            on_submit(tid, {"resolved_by": id_field})
+        except Exception:  # noqa: BLE001
+            pass
+    if progress:
+        progress(f"DubVoice (video) en cola (task {tid[:8]}…)")
+    return tid, _wait_and_download(tid, d, lim, h, progress, cancel, on_poll, gate, rec, submitted_at=time.time())
+
+
+def _poll_once(tid: str, h: dict, lim: dict, cancel, rec, n: int) -> dict:
+    """Un sondeo. Prueba las rutas candidatas (404 → siguiente) y recuerda la que responde."""
+    cands = [_poll_cache["/api/v1/video"]] if "/api/v1/video" in _poll_cache else CANDIDATES
+    for p_, key in cands:
+        t0 = time.time()
+        try:
+            g = request_once("GET", f"{BASE}{p_}", params={key: tid}, headers=h, connect=10, read=lim["poll_request"],
+                             deadline=lim["poll_request"], cancel=cancel)
+        except F5Error as e:
+            rec.http("poll", "GET", f"{BASE}{p_}", {"param": key}, error=f"{e.etype.value} {e}", t0=t0, n=n)
+            raise
+        rec.http("poll", "GET", f"{BASE}{p_}", {"param": key}, resp=g, t0=t0, n=n)
+        if g.status_code == 404:
+            _poll_cache.pop("/api/v1/video", None)
+            continue
+        if g.status_code != 200:
+            raise typed_error("DubVoice (video, estado)", g, "dubvoice")
+        try:
+            j = g.json()
+        except Exception:  # noqa: BLE001
+            raise F5Error(ErrorType.INVALID_RESPONSE, "DubVoice (video, estado): respuesta no JSON", provider="dubvoice", job_id=tid, sub="poll_not_json")
+        _poll_cache["/api/v1/video"] = (p_, key)
+        rec.info.update(poll_endpoint=p_, poll_param=key, poll_response_shape=errors.shape(j))
+        return _flat(j)
+    raise F5Error(ErrorType.INVALID_RESPONSE, "DubVoice (video): ninguna ruta de sondeo conocida responde para este job", provider="dubvoice",
+                  job_id=tid, sub="poll_endpoint")
+
+
+def _wait_and_download(tid: str, first: dict | None, lim: dict, h: dict, progress, cancel, on_poll, gate, rec, submitted_at: float) -> bytes:
+    deadline = submitted_at + lim["processing"]
+    fails = polls = 0
+    last = ""
+    d = first
+    while True:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("Cancelado")
+        if d is None:
+            if time.time() > deadline:
+                raise F5Error(ErrorType.PROVIDER_TIMEOUT, f"DubVoice (video) no termino en {int(lim['processing'] // 60)} min. Ultimo estado: {last}",
+                              provider="dubvoice", job_id=tid)
+            _sleep(lim["poll_interval"], cancel)
+            if gate:
+                gate()
+            try:
+                d = _poll_once(tid, h, lim, cancel, rec, polls + 1)
+                fails = 0
+            except F5Error as e:
+                if e.etype == ErrorType.INVALID_RESPONSE or (e.etype == ErrorType.PROVIDER_REJECTED and e.fatal):
+                    e.job_id = e.job_id or tid
+                    raise
+                fails += 1
+                last = f"{e.etype.value}: {str(e)[:120]}"
+                if e.etype == ErrorType.RATE_LIMIT and e.retry_after:
+                    _sleep(min(e.retry_after, 60), cancel)
+                if fails >= lim["max_poll_failures"]:
+                    raise F5Error(ErrorType.CONNECTION_ERROR, f"DubVoice (video): {fails} sondeos seguidos fallaron ({last})", provider="dubvoice",
+                                  job_id=tid, sub="poll_failures")
+                continue
+            polls += 1
+        s = _status(d)
+        norm = "done" if s in DONE else "failed" if s in FAILED else "processing" if (s in PENDING_STATES or not s) else "unrecognized"
+        if s or polls > 0:                      # la respuesta del POST solo cuenta como estado si trae uno
+            rec.status_seen(tid, s or "<sin estado>", norm)
+        if on_poll and polls > 0:
+            try:
+                on_poll(polls, s or None)
+            except Exception:  # noqa: BLE001
+                pass
+        last = str({k: d.get(k) for k in ("status", "state", "progress", "error", "message") if k in d})[:300]
+        if norm == "failed":
+            msg = f"DubVoice (video) fallo: {d.get('error') or d.get('message') or 'sin detalle'} (creditos reembolsados por DubVoice)"
+            et = errors.classify(msg)
+            et = et if et == ErrorType.CONTENT_FILTER else ErrorType.PROVIDER_REJECTED
+            raise F5Error(et, msg, provider="dubvoice", job_id=tid, sub="provider_failed")
+        urls = _urls(d)
+        if urls and (norm == "done" or not s):
+            rec.info.update(status_field="status" if "status" in d else "state" if "state" in d else None,
+                            result_field=[k for k in ("video_url", "url", "result", "output", "video", "file_url") if k in d][:1])
+            data = _download_strict(urls, tid, lim, gate, cancel, rec, lambda: _refresh_urls(tid, h, lim, cancel, rec))
+            rec.verified(result_url_host=errors.scrub(urls[0], 120).split("?")[0], job_id_seen=True)
+            return data
+        if norm == "done":
+            raise F5Error(ErrorType.INVALID_RESPONSE, f"DubVoice (video) termino sin URL de resultado. Forma: {errors.shape(d)}", provider="dubvoice",
+                          job_id=tid, sub="done_without_url")
+        if progress:
+            el = int(time.time() - submitted_at)
+            progress(f"DubVoice (video) generando… {el // 60}:{el % 60:02d} min (estado: {s or 'en proceso'})")
+        d = None
+
+
+def _refresh_urls(tid, h, lim, cancel, rec) -> list[str]:
+    try:
+        return _urls(_poll_once(tid, h, lim, cancel, rec, -1))
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _download_strict(urls: list[str], tid, lim: dict, gate, cancel, rec, refresh) -> bytes:
+    last: F5Error | None = None
+    for i in range(max(int(lim["download_retries"]), 1)):
+        if i > 0:
+            _sleep(2 * i, cancel)
+            fresh = refresh()
+            if fresh:
+                urls = fresh
+        t0 = time.time()
+        try:
+            data = http_download(urls[0], deadline=lim["download"], cancel=cancel)
+            rec.note("download", url=errors.scrub(urls[0], 200).split("?")[0], bytes=len(data), elapsed_ms=int((time.time() - t0) * 1000), attempt=i + 1)
+            return data
+        except F5Error as e:
+            last = e
+            rec.note("download_error", error=str(e)[:200], attempt=i + 1)
+    raise F5Error(ErrorType.DOWNLOAD_ERROR, f"No se pudo descargar el video ({last})", provider="dubvoice", job_id=tid, sub=(last.sub if last else None),
+                  result_url=errors.scrub(urls[0], 200).split("?")[0])
+
+
+def resume(job_id: str, model: str | None = None, progress=None, cancel=None, on_poll=None, limits: dict | None = None, gate=None,
+           recorder=None) -> tuple[str, bytes]:
+    """RECONCILIACION: sondea un job YA existente y descarga su resultado. Jamas crea un job nuevo (cero POST de creacion)."""
+    lim = {**DEFAULT_LIMITS, **(limits or {})}
+    rec = recorder or _NullRecorder()
+    rec.note("resume", job_id=job_id)
+    return job_id, _wait_and_download(job_id, None, lim, _h(), progress, cancel, on_poll, gate, rec, submitted_at=time.time())
 
 
 # ------------------------------------------------------------------ voces

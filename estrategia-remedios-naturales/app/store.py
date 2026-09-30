@@ -21,8 +21,8 @@ DEFAULT_SETTINGS = {
     "kie_image_model": "google/nano-banana-edit",
     "video_model": "veo3_fast",
     "video_provider": "dubvoice",           # DubVoice es el proveedor principal de video
-    "salvage_still": True,                  # ultimo recurso: locucion sobre imagen fija para no quedar sin video
-    "video_fallback": True,                 # reintentos tras fallo/atasco -> Veo directo con la key de Google
+    "salvage_still": False,                 # (obsoleto) la locucion sobre imagen fija ya NO es automatica: solo por accion explicita (/videos/salvage)
+    "video_fallback": True,                 # F5: tras timeouts/rechazos del primario → Veo directo con la key de Google (False = sin fallback)
     "google_video_model": "veo-3.1-fast-generate-preview",
     "dubvoice_image_model": "nano-banana-pro",
     "image_fallback": True,

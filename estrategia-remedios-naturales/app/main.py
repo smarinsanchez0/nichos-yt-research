@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from . import config, jobs, media, store
-from .phases import analysis, avatar, editing, fragment, images, supervisor, videos
+from .phases import analysis, avatar, editing, fragment, images, supervisor, video_jobs, videos
 from .services import dubvoice, eleven
 
 app = FastAPI(title="ESTRATEGIA REMEDIOS NATURALES")
@@ -81,6 +81,8 @@ def patch_settings(pid: str, body: dict = Body(...)):
 @app.post("/api/projects/{pid}/jobs/{name}/reset")
 def reset_job(pid: str, name: str):
     P(pid)
+    if name in ("videos", "supervisor") or name.startswith("clip:"):
+        video_jobs.stop_project(pid)          # F5: cancela los drivers; los jobs remotos se conservan y se reconcilian (no se re-pagan)
     jobs.force_reset(pid, name)
     return {"ok": True}
 
@@ -281,12 +283,13 @@ def gen_videos(pid: str, body: dict = Body(default={})):
     if p["settings"].get("unify_voice"):
         _need(bool(p["settings"].get("voice_id")), "Elige una voz (o desactiva 'unificar voz')")
     pairs = body.get("clips")
+    explicit = pairs is not None
     if pairs is None:
         pairs = [(s["idx"], c["idx"]) for s in p["scenes"] for c in s["clips"]
-                 if c.get("status") != "done" or c.get("stale")]
+                 if video_jobs.needs_work(c) or c.get("status") != "done"]
     pairs = [(int(a), int(b)) for a, b in pairs]
     _need(bool(pairs), "Todos los clips estan listos")
-    return _start(pid, "videos", lambda prog: videos.render_many(pid, prog, pairs))
+    return _start(pid, "videos", lambda prog: videos.render_many(pid, prog, pairs, explicit))
 
 
 @app.post("/api/projects/{pid}/videos/salvage")
@@ -316,10 +319,31 @@ def supervisor_stop(pid: str):
 
 
 @app.post("/api/projects/{pid}/videos/{i}/{j}/regenerate")
-def regen_clip(pid: str, i: int, j: int):
+def regen_clip(pid: str, i: int, j: int, paid: bool = False):
+    """Regenerar un clip = accion EXPLICITA. Pasa por el planificador unico de F5. Si el clip esta en revision solo por un fallo de
+    post-proceso (o un job remoto conocido) primero se intenta la recuperacion GRATIS; `?paid=1` fuerza una generacion nueva."""
     p = P(pid)
     _need(0 <= i < len(p["scenes"]) and 0 <= j < len(p["scenes"][i].get("clips", [])), "Clip inexistente")
-    return _start(pid, f"clip:{i}:{j}", lambda prog: videos.render_clip(pid, i, j, prog))
+
+    def go(prog):
+        if paid:
+            video_jobs.reset_clip(pid, i, j, why="user_paid")
+        video_jobs.run_project(pid, [(i, j)], prog=prog, explicit=True)
+    return _start(pid, f"clip:{i}:{j}", go)
+
+
+@app.get("/api/projects/{pid}/f5/summary")
+def f5_summary(pid: str):
+    """Telemetria de la Fase 5 (solo lectura): estado global, totales, errores por tipo, tiempos, creditos e historial por clip."""
+    return video_jobs.summarize(P(pid))
+
+
+@app.get("/api/projects/{pid}/f5/clip/{i}/{j}")
+def f5_clip(pid: str, i: int, j: int):
+    p = P(pid)
+    _need(0 <= i < len(p["scenes"]) and 0 <= j < len(p["scenes"][i].get("clips", [])), "Clip inexistente")
+    c = p["scenes"][i]["clips"][j]
+    return video_jobs.ensure(c, p["scenes"][i], p["scenes"][i]["clips"]) if not c.get("f5") else c["f5"]
 
 
 # ------------------------------------------------------------------ fase 6

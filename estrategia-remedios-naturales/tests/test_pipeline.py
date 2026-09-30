@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-os.environ["ERN_DATA_DIR"] = tempfile.mkdtemp(prefix="ern-test-")
+os.environ.setdefault("ERN_DATA_DIR", tempfile.mkdtemp(prefix="ern-test-"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
@@ -70,6 +70,8 @@ def fake_ask_json(content, *, system="", model="", max_tokens=0):
             assert len(nums) == n
             return {"scenes": [{"n": k, "shot": "medium", "person": "talks", "setting": "kitchen with US flag", "props": [],
                                 "on_screen_text": "", "lighting": "warm", "motion": "none", "summary_es": "cocina"} for k in nums]}
+        if txt.startswith("QC VISUAL"):
+            return {"visual_ok": True, "reasons": [], "prompt_fix": ""}
         if "Para CADA clip" in txt:
             items = json.loads(txt.split("\n\n", 1)[1])
             return {"scenes": [{"scene": it["scene"], "clips": [
@@ -480,10 +482,21 @@ def test_dubvoice_video_progress_and_timeout(monkeypatch, tmp_path):
     assert any("generando" in m for m in msgs)
 
 
+def _fast_f5(monkeypatch):
+    from app.phases import video_jobs
+    video_jobs.SCHED.reset_for_tests()
+    video_jobs._overrides.clear()
+    video_jobs._overrides.update(poll_interval=0.05, contract_canary=False, watchdog_margin=2)
+    for name in ("WAIT_TIMEOUT_RETRY", "WAIT_AMBIGUOUS", "WAIT_UNKNOWN", "WAIT_DOWNLOAD"):
+        monkeypatch.setattr(video_jobs, name, 0.0)
+    return video_jobs
+
+
 def test_supervisor_retries_failures_audits_and_finishes(client, monkeypatch):
-    """Supervisor Claude: un clip falla (politica de contenido), Claude reescribe el prompt y reintenta; todo termina aceptado."""
+    """Fase 5: un clip falla por politica de contenido; el MOTOR (no Claude) decide reintentar, Claude solo reescribe el prompt y hace el QC."""
     from app.phases import supervisor
     from app import store
+    _fast_f5(monkeypatch)
     pid = client.post("/api/projects", json={"name": "sup"}).json()["id"]
     img = store.path(pid, "images", "i.jpg"); Image.new("RGB", (100, 180)).save(img)
     dlg = "ginger tea can calm your stomach"
@@ -502,15 +515,10 @@ def test_supervisor_retries_failures_audits_and_finishes(client, monkeypatch):
 
     def fake_sup(content, *, system="", model="", max_tokens=0):
         txt = content[-1]["text"]
-        assert txt.startswith("ESTADO"), txt[:80]
-        state = json.loads(txt.split("\n", 1)[1].split("\n\nEVENTOS")[0])
-        acts = []
-        for row in state:
-            if row["state"] == "failed":
-                acts.append({"do": "retry", "scene": row["scene"], "clip": row["clip"], "reason": "politica", "prompt": "simplified prompt"})
-        for m in re.findall(r"E(\d+)C(\d+)", txt.split("CLIPS PENDIENTES DE TU REVISION")[1].split("\n")[0]):
-            acts.append({"do": "accept", "scene": int(m[0]), "clip": int(m[1])})
-        return {"analysis": "ok", "actions": acts}
+        if txt.startswith("REESCRIBE PROMPT"):
+            return {"prompt": "simplified prompt"}
+        assert txt.startswith("QC VISUAL"), txt[:80]
+        return {"visual_ok": True, "reasons": [], "prompt_fix": ""}
 
     monkeypatch.setattr(dubvoice, "veo", fake_veo)
     monkeypatch.setattr(google_veo, "veo", lambda prompt, image_path, **k: fake_veo(prompt, image_path))
@@ -520,7 +528,7 @@ def test_supervisor_retries_failures_audits_and_finishes(client, monkeypatch):
     supervisor.start(pid, lambda msg=None, progress=None: None)
     p = store.get(pid)
     clips = [c for s in p["scenes"] for c in s["clips"]]
-    assert all(c["status"] == "done" and c["verified"] for c in clips)
+    assert all(c["status"] == "done" and c["verified"] and c["f5"]["state"] == "ACCEPTED" for c in clips)
     assert "simplified prompt" in calls["veo"] and any(c["video_prompt"] == "simplified prompt" for c in clips)   # cual clip falla primero depende del paralelismo
     log = " ".join(x["msg"] for x in p["jobs"]["supervisor"]["log"])
     assert "Reintento" in log and "Aceptado" in log and "Terminado: 2/2" in log
@@ -538,64 +546,74 @@ def _setup_sup_project(client, n=2, dlg="ginger tea can calm your stomach"):
     return pid
 
 
-def test_supervisor_autopilot_when_claude_is_down(client, monkeypatch):
-    """Sin Claude el supervisor no se cuelga: reintenta fallos y acepta lo que pasa la auditoria basica."""
+def test_supervisor_when_claude_is_down_keeps_the_raw_and_never_regenerates(client, monkeypatch):
+    """Claude caido: el motor NO se cuelga ni destruye el RAW pagado ni regenera; deja el clip en revision y se reanuda gratis."""
     from app.phases import supervisor
     from app import store
+    _fast_f5(monkeypatch)
     pid = _setup_sup_project(client)
     n = {"i": 0}
 
     def flaky_veo(prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None, cancel=None):
         n["i"] += 1
         if n["i"] == 1:
-            raise RuntimeError("503 servicio caido")
+            raise RuntimeError("503 servicio caido")            # error desconocido → UN reintento del motor
         return "t", fake_video(prompt)
 
     def down(*a, **k): raise RuntimeError("Anthropic respondio 529")
 
     monkeypatch.setattr(dubvoice, "veo", flaky_veo)
     monkeypatch.setattr(claude, "ask_json", down)
-    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
-        "text": "ginger tea can calm your stomach", "words": []})
-    supervisor.start(pid, lambda msg=None, progress=None: None)
+    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {"text": "ginger tea can calm your stomach", "words": []})
+    res = supervisor.start(pid, lambda msg=None, progress=None: None)
     clips = [c for s in store.get(pid)["scenes"] for c in s["clips"]]
-    assert all(c["status"] == "done" and c["verified"] for c in clips)
+    assert res["state"] == "COMPLETED_WITH_WARNINGS" and n["i"] == 3                      # 2 clips + 1 reintento; NADA se regenera por culpa de Claude
+    for c in clips:
+        f5 = c["f5"]
+        assert f5["state"] == "NEEDS_REVIEW" and f5["review_reason"] == "QC_UNAVAILABLE"
+        assert (store.pdir(pid) / f5["attempts"][-1]["raw"]).exists()
+    monkeypatch.setattr(claude, "ask_json", lambda content, **k: {"visual_ok": True, "reasons": [], "prompt_fix": ""})
+    supervisor.start(pid, lambda msg=None, progress=None: None)                            # Claude vuelve: se reanuda desde el RAW
+    assert n["i"] == 3 and all(c["status"] == "done" and c["f5"]["state"] == "ACCEPTED" for s in store.get(pid)["scenes"] for c in s["clips"])
 
 
-def test_supervisor_salvages_with_voiceover_when_all_providers_fail(client, monkeypatch):
-    """Si ningun proveedor entrega el clip, se completa con locucion sobre la imagen aprobada (salida garantizada)."""
-    from app.phases import supervisor
+def test_supervisor_does_not_salvage_with_a_still_image_automatically(client, monkeypatch):
+    """Decision de producto: la locucion sobre imagen fija es OPT-IN (endpoint /videos/salvage), jamas un fallback automatico."""
+    from app.phases import supervisor, videos
     from app import store
+    _fast_f5(monkeypatch)
     pid = _setup_sup_project(client, n=1)
 
     def always_fail(prompt, image_path, **k): raise RuntimeError("content policy")
 
     monkeypatch.setattr(dubvoice, "veo", always_fail)
     monkeypatch.setattr(google_veo, "veo", always_fail)
-    monkeypatch.setattr(dubvoice, "edge_tts", lambda text, voice="x": _mp3(4))
-    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_for_raise()))
-    supervisor.start(pid, lambda msg=None, progress=None: None)
+    monkeypatch.setattr(videos, "make_still_clip", lambda *a, **k: (_ for _ in ()).throw(AssertionError("imagen fija automatica")))
+    monkeypatch.setattr(claude, "ask_json", lambda content, **k: {"prompt": "otro prompt " + str(time.time())})
+    res = supervisor.start(pid, lambda msg=None, progress=None: None)
     c = store.get(pid)["scenes"][0]["clips"][0]
-    assert c["status"] == "done" and c["provider_used"] == "still" and "imagen fija" in c["warning"]
+    assert res["state"] == "COMPLETED_WITH_WARNINGS" and c["f5"]["state"] == "NEEDS_REVIEW" and c["status"] == "error" and not c.get("file")
+    # el usuario SI puede pedirla explicitamente
+    monkeypatch.undo()
+    monkeypatch.setattr(dubvoice, "edge_tts", lambda text, voice="x": _mp3(4))
+    videos.make_still_clip(pid, 0, 0)
+    c = store.get(pid)["scenes"][0]["clips"][0]
+    assert c["status"] == "done" and c["provider_used"] == "still" and c["f5"]["state"] == "ACCEPTED" and c["f5"]["accepted_via"] == "still_image_optin"
     info = media.probe(Path(os.environ["ERN_DATA_DIR"]) / "projects" / pid / c["file"])
     assert (info["width"], info["height"]) == (1080, 1920) and info["has_audio"] and info["duration"] > 2
 
 
-def _for_raise():
-    raise RuntimeError("down")
-
-
-def test_google_quota_error_disables_google_and_uses_dubvoice_model_ladder(client, monkeypatch):
+def test_google_quota_error_disables_google_and_there_is_no_model_ladder(client, monkeypatch):
     from app.phases import supervisor
     from app import store
+    from app.services.errors import ErrorType, F5Error
+    _fast_f5(monkeypatch)
     pid = _setup_sup_project(client, n=1)
     seen = []
 
     def dub(prompt, image_path, model="veo-3.1-fast", **k):
         seen.append(("dubvoice", model))
-        if len(seen) == 1:
-            raise RuntimeError("DubVoice (video) no termino en 10 min")
-        return "t", fake_video(prompt)
+        raise F5Error(ErrorType.PROVIDER_TIMEOUT, "DubVoice (video) no termino en 10 min", provider="dubvoice", job_id=f"j{len(seen)}")
 
     def goog(prompt, image_path, **k):
         seen.append(("google", None))
@@ -603,14 +621,10 @@ def test_google_quota_error_disables_google_and_uses_dubvoice_model_ladder(clien
 
     monkeypatch.setattr(dubvoice, "veo", dub)
     monkeypatch.setattr(google_veo, "veo", goog)
-    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_for_raise()))
-    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
-        "text": "ginger tea can calm your stomach", "words": []})
-    supervisor.start(pid, lambda msg=None, progress=None: None)
+    res = supervisor.start(pid, lambda msg=None, progress=None: None)
     c = store.get(pid)["scenes"][0]["clips"][0]
-    assert [x[0] for x in seen] == ["dubvoice", "google", "dubvoice"] and seen[2][1] == "veo-3.1-lite"
-    assert c["status"] == "done" and c["provider_used"] == "dubvoice" and c["attempts"] <= 2
-
+    assert [x[0] for x in seen] == ["dubvoice", "dubvoice", "google"] and {x[1] for x in seen if x[0] == "dubvoice"} == {"veo-3.1-fast"}   # sin lite/omniflash/meta
+    assert c["f5"]["state"] == "NEEDS_REVIEW" and res["state"] == "COMPLETED_WITH_WARNINGS"
 
 
 def test_cli_demo_end_to_end_delivers_final_video(tmp_path):
@@ -663,23 +677,26 @@ def test_dubvoice_retries_connection_reset(monkeypatch, tmp_path):
 
 
 def test_supervisor_retry_goes_to_google_after_dubvoice_failure(client, monkeypatch):
-    """Primer intento en DubVoice; si falla, el reintento va a Veo directo de Google (mas estable)."""
+    """Primario DubVoice; tras dos timeouts (con job_id) el motor pasa al fallback Google Veo directo."""
     from app.phases import supervisor
     from app import store
+    from app.services.errors import ErrorType, F5Error
+    _fast_f5(monkeypatch)
     pid = _setup_sup_project(client, n=1)
     used = []
 
     def dub_fail(prompt, image_path, **k):
-        used.append("dubvoice"); raise RuntimeError("DubVoice (video) no termino en 10 min")
+        used.append("dubvoice")
+        raise F5Error(ErrorType.PROVIDER_TIMEOUT, "DubVoice (video) no termino en 10 min", provider="dubvoice", job_id=f"j{len(used)}")
 
     def google_ok(prompt, image_path, model="x", aspect="9:16", duration=8, resolution="720p", progress=None, timeout=0, cancel=None):
         used.append("google"); return "g", fake_video(prompt)
 
     monkeypatch.setattr(dubvoice, "veo", dub_fail)
     monkeypatch.setattr(google_veo, "veo", google_ok)
-    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))   # autopiloto
+    monkeypatch.setattr(claude, "ask_json", lambda content, **k: {"visual_ok": True, "reasons": [], "prompt_fix": ""})
     monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
         "text": "ginger tea can calm your stomach", "words": []})
     supervisor.start(pid, lambda msg=None, progress=None: None)
     c = store.get(pid)["scenes"][0]["clips"][0]
-    assert used[:2] == ["dubvoice", "google"] and c["provider_used"] == "google" and c["verified"]
+    assert used == ["dubvoice", "dubvoice", "google"] and c["provider_used"] == "google" and c["verified"] and c["f5"]["state"] == "ACCEPTED"
