@@ -3,6 +3,7 @@
 Todo es SIMULADO: ningun test llama a una API real (proveedores, Claude y Whisper se sustituyen). ffmpeg es real (genera MP4 de prueba).
 Ejecuta:  pytest -q tests/test_f5_jobs.py
 """
+from __future__ import annotations
 import json
 import os
 import re
@@ -1300,3 +1301,29 @@ def test_configuration_also_reads_exports_from_zshrc_style_files(monkeypatch):
     assert vj.config().max_concurrent_video_jobs == 2
     monkeypatch.setenv("MAX_CONCURRENT_VIDEO_JOBS", "1")                             # el entorno real manda
     assert vj.config().max_concurrent_video_jobs == 1
+
+
+def test_legacy_migrated_attempt_is_history_not_a_paid_f5_attempt(monkeypatch):
+    """Regresion del canario: un clip 'done' de una version anterior (intento legacy) NO debe contar como paid_attempt / credito / POST de F5."""
+    dub, _ = install(monkeypatch)
+    pid = make_project(scenes=2)
+    f = store.path(pid, "videos", "old.mp4")
+    f.write_bytes(make_video(8))
+    with store.edit(pid) as q:
+        q["scenes"][0]["clips"][0].update(status="done", file=store.rel(pid, f), raw=store.rel(pid, f), provider_used=None, task_id="OLD", verified=True)
+        q["scenes"][1]["clips"][0]["status"] = "pending"
+    with vj.clip_edit(pid, 0, 0):                                                        # persiste el bloque f5 del clip migrado (como en el canario real)
+        pass
+    res, _ = run(pid, keys=[(0, 0), (1, 0)], explicit=False)
+    assert len(dub.calls) == 1                                                          # solo el clip nuevo hizo un POST
+    legacy_f5 = vj.ensure(dict(clips_of(pid)[0]), store.get(pid)["scenes"][0], store.get(pid)["scenes"][0]["clips"])
+    assert legacy_f5["attempts"][0]["legacy"] and legacy_f5["attempts"][0]["paid"]       # el historial legacy NO se borra ni se altera
+    assert vj.paid_attempts(legacy_f5) == 0 and legacy_f5["credits_spent"] == 0
+    s = vj.summarize(store.get(pid))
+    assert s["attempts_total"] == 1 and s["paid_attempts"] == 1 and s["accepted"] == 2 and s["credits_estimated"] == 7500
+    assert "?" not in s["per_provider"] and s["per_provider"] == {"dubvoice": {"attempts": 1, "accepted": 1, "paid": 1}}
+    assert any(a.get("legacy") for c in s["clips"] for a in c["attempts"])              # el legacy sigue visible en el detalle
+    # regenerar el clip legacy abre una ronda nueva: el legacy no consume presupuesto
+    run(pid, keys=[(0, 0)], explicit=True)
+    f5 = f5_of(pid, 0)
+    assert f5["round"] == 2 and vj.paid_attempts(f5) == 1 and clips_of(pid)[0]["attempts"] == 1

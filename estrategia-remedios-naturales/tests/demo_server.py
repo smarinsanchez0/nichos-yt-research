@@ -1,5 +1,6 @@
 """Servidor de DEMO con servicios simulados (no gasta creditos): python tests/demo_server.py
 Sirve para probar la interfaz completa sin API keys. Puerto 8099."""
+from __future__ import annotations
 import os
 import sys
 import tempfile

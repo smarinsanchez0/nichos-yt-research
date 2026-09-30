@@ -2,6 +2,7 @@
 
 Ejecuta: pytest -q     (usa ffmpeg real para escenas, recortes de silencio y subtitulos)
 """
+from __future__ import annotations
 import io
 import json
 import os

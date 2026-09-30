@@ -276,7 +276,7 @@ def mirror(clip: dict, f5: dict) -> None:
     """Mantiene actualizados los campos heredados. F6 y la UI siguen leyendo `status`/`file`/`error`."""
     st = f5["state"]
     clip["status"] = legacy_status(st)
-    clip["attempts"] = sum(1 for a in f5["attempts"] if a.get("paid") and a.get("round") == f5["round"])
+    clip["attempts"] = paid_attempts(f5)
     if st in (NEEDS_REVIEW, FAILED):
         clip["error"] = (f"[{f5.get('review_reason') or st}] " + (f5.get("review_message") or ""))[:600]
     elif st != ACCEPTED:
@@ -350,8 +350,8 @@ def patch_attempt(pid: str, si: int, ci: int, att_id: str, **fields) -> None:
                 a.update(fields)
                 break
         if "credits" in fields or "refund_assumed" in fields or "paid" in fields:
-            f5["credits_spent"] = sum((a.get("credits") or 0) for a in f5["attempts"]
-                                      if a.get("paid") and not a.get("refund_assumed") and a.get("round") == f5["round"])
+            f5["credits_spent"] = sum((a.get("credits") or 0) for a in f5["attempts"] if a.get("paid") and not a.get("refund_assumed")
+                                      and not a.get("legacy") and a.get("round") == f5["round"])
         mirror(clip, f5)
 
 
@@ -366,7 +366,8 @@ def attempt_of(f5: dict, att_id: str | None = None) -> dict | None:
 
 
 def paid_attempts(f5: dict) -> int:
-    return sum(1 for a in f5["attempts"] if a.get("paid") and a.get("round") == f5["round"])
+    """Generaciones pagadas de la ronda actual. El intento 'legacy' (clip migrado de una version anterior) es historial, no un POST de F5."""
+    return sum(1 for a in f5["attempts"] if a.get("paid") and not a.get("legacy") and a.get("round") == f5["round"])
 
 
 def reset_clip(pid: str, si: int, ci: int, *, why: str = "user") -> None:
@@ -1115,8 +1116,8 @@ class ClipDriver:
                         f5["state"] = PENDING
                     f5["history"].append({"t": round(now(), 1), "from": f5["state"], "to": SUBMITTED, "note": f"job {job_id[:16]}"})
                     f5["state"], f5["state_since"] = SUBMITTED, now()
-                f5["credits_spent"] = sum((a.get("credits") or 0) for a in f5["attempts"]
-                                          if a.get("paid") and not a.get("refund_assumed") and a.get("round") == f5["round"])
+                f5["credits_spent"] = sum((a.get("credits") or 0) for a in f5["attempts"] if a.get("paid") and not a.get("refund_assumed")
+                                          and not a.get("legacy") and a.get("round") == f5["round"])
                 mirror(clip, f5)
                 clip["task_id"] = job_id
             event(self.pid, "job_submitted", scene=self.si, clip=self.ci, attempt=att_id, provider=plan.provider, job_id=job_id)
@@ -1458,10 +1459,11 @@ def summarize(p: dict) -> dict:
             if not f5:
                 continue
             atts = f5.get("attempts", [])
-            attempts_total += len(atts)
-            cur = [a for a in atts if a.get("round") == f5.get("round")]
+            real = [a for a in atts if not a.get("legacy")]          # el intento migrado (legacy) se conserva en el historial pero NO es un POST de F5
+            attempts_total += len(real)
+            cur = [a for a in real if a.get("round") == f5.get("round")]
             retries += max(len(cur) - 1, 0)
-            for a in atts:
+            for a in real:
                 d = prov.setdefault(a.get("provider") or "?", {"attempts": 0, "accepted": 0, "paid": 0})
                 d["attempts"] += 1
                 if a.get("paid"):
@@ -1480,7 +1482,7 @@ def summarize(p: dict) -> dict:
             row = {"scene": si + 1, "clip": ci + 1, "state": st, "visual_state": f5.get("visual_state"), "audio_state": f5.get("audio_state"),
                    "target_duration": f5.get("target_duration"), "source_start": f5.get("source_start"), "source_end": f5.get("source_end"),
                    "attempts": [{k: a.get(k) for k in ("id", "provider", "model", "job_id", "status", "submitted_at", "last_polled_at", "completed_at", "polls",
-                                                       "error_type", "error_message", "target_duration", "provider_duration", "credits", "possible_duplicate")}
+                                                       "error_type", "error_message", "target_duration", "provider_duration", "credits", "possible_duplicate", "legacy")}
                                 for a in atts]}
             clips.append(row)
             if st in (NEEDS_REVIEW, FAILED):
