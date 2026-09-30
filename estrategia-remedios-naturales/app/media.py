@@ -11,7 +11,7 @@ from .config import FONTS_DIR, ffmpeg_path
 def _ff() -> str:
     p = ffmpeg_path()
     if not p:
-        raise RuntimeError("ffmpeg no encontrado. Instala con `brew install ffmpeg` o `pip install imageio-ffmpeg`.")
+        raise RuntimeError("No encuentro un ffmpeg que funcione en este Mac. Instalalo con: brew install ffmpeg  (o revisa que .venv tenga imageio-ffmpeg para tu chip).")
     return p
 
 

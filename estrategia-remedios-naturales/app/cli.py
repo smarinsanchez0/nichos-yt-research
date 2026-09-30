@@ -30,7 +30,7 @@ def cmd_doctor(_a) -> int:
         _log(f"{'✅' if v['ok'] else ('❌' if need else '➖')} {k}: {'ok (' + v['var'] + ')' if v['ok'] else 'no encontrada'}"
              + ("" if v["ok"] or not need else "  <- NECESARIA"))
         ok = ok and (v["ok"] or not need)
-    _log(f"{'✅' if st['ffmpeg'] else '❌'} ffmpeg")
+    _log(f"{'✅' if st['ffmpeg'] else '❌'} ffmpeg" + ("" if st["ffmpeg"] else "  <- instala con: brew install ffmpeg"))
     ok = ok and st["ffmpeg"]
     try:
         import faster_whisper  # noqa: F401

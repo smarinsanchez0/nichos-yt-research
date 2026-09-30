@@ -131,15 +131,38 @@ def mask(v: str | None) -> str | None:
     return "…" + v[-4:] if len(v) > 8 else "…"
 
 
-def ffmpeg_path() -> str | None:
-    p = shutil.which("ffmpeg")
-    if p:
-        return p
+_ffmpeg_cache: list = []
+
+
+def _runs(path: str) -> bool:
+    import subprocess
     try:
+        return subprocess.run([path, "-version"], capture_output=True, timeout=20).returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def ffmpeg_path() -> str | None:
+    """ffmpeg que REALMENTE funciona: el del sistema, Homebrew o cualquiera de los binarios de imageio-ffmpeg."""
+    if _ffmpeg_cache:
+        return _ffmpeg_cache[0]
+    cands = [shutil.which("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+    try:
+        import glob
         import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        return None
+        try:
+            cands.append(imageio_ffmpeg.get_ffmpeg_exe())
+        except Exception:  # noqa: BLE001
+            pass
+        bindir = Path(imageio_ffmpeg.__file__).parent / "binaries"
+        cands += sorted(glob.glob(str(bindir / "ffmpeg*")))     # p. ej. la version arm64 aunque Python crea que es x86_64
+    except ImportError:
+        pass
+    for c in cands:
+        if c and Path(c).is_file() and _runs(c):
+            _ffmpeg_cache.append(c)
+            return c
+    return None
 
 
 def status() -> dict:
