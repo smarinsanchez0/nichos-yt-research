@@ -78,9 +78,31 @@ def _urls(d: dict) -> list[str]:
     return []
 
 
-def _post(service: str, path: str, body: dict, timeout: float = 600, auth: str = "bearer"):
+import threading
+
+_throttle_lock = threading.Lock()
+_last_post = [0.0]
+MIN_GAP = 6.5          # DubVoice: 10 solicitudes/min por key
+
+
+def _throttle(cancel=None) -> None:
+    with _throttle_lock:
+        wait = MIN_GAP - (time.time() - _last_post[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_post[0] = time.time()
+
+
+class Cancelled(RuntimeError):
+    pass
+
+
+def _post(service: str, path: str, body: dict, timeout: float = 600, auth: str = "bearer", cancel=None):
     """POST con espera automatica cuando DubVoice limita (429: max 3 en paralelo / 10 por minuto)."""
     for attempt in range(20):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("Cancelado")
+        _throttle()
         r = request("POST", f"{BASE}{path}", json=body, headers=_h(auth), timeout=timeout, retries=1)
         if r.status_code != 429:
             return r
@@ -103,10 +125,12 @@ def _check(service: str, r):
         raise RuntimeError(f"{service}: respuesta no JSON: {r.text[:200]}")
 
 
-def _wait(get, service: str, timeout: float, interval: float, progress=None) -> list[str]:
+def _wait(get, service: str, timeout: float, interval: float, progress=None, cancel=None) -> list[str]:
     t0 = time.time()
     last, errors = "", 0
     while time.time() - t0 < timeout:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("Cancelado")
         time.sleep(interval)
         try:
             d = get()
@@ -147,8 +171,8 @@ _poll_cache: dict[str, tuple[str, str]] = {}
 
 def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[tuple[str, str]],
                      timeout: float, interval: float, progress=None, post_timeout: float = 600,
-                     auth: str = "bearer") -> tuple[str, list[str]]:
-    d = _check(service, _post(service, path, body, post_timeout, auth))
+                     auth: str = "bearer", cancel=None) -> tuple[str, list[str]]:
+    d = _check(service, _post(service, path, body, post_timeout, auth, cancel))
     tid = _task_id(d)
     urls = _urls(d)
     if urls and _status(d) not in {"pending", "processing", "queued"}:
@@ -167,7 +191,7 @@ def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[
             return _check(service, g)
         raise RuntimeError(f"{service}: no encontre la ruta para consultar la tarea (revisa /dashboard/api-docs).")
 
-    return tid, _wait(get, service, timeout, interval, progress)
+    return tid, _wait(get, service, timeout, interval, progress, cancel)
 
 
 def tier_for(seconds: float, model: str = "omniflash") -> int:
@@ -187,14 +211,15 @@ def credits_for(model: str, seconds: float) -> int:
 
 
 def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str = "9:16",
-        resolution: str = "720p", progress=None, timeout: float = 600, duration: float | None = None) -> tuple[str, bytes]:
+        resolution: str = "720p", progress=None, timeout: float = 600, duration: float | None = None,
+        cancel=None) -> tuple[str, bytes]:
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect, "resolution": resolution,
             "ref_images": [data_uri(image_path, 1600)], "mode_image": "frame"}
     if model == "omniflash":
         body["duration"] = tier_for(duration or 8, model)
     tid, urls = _submit_and_wait("DubVoice (video)", "/api/v1/video", body,
                                  [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")],
-                                 timeout, 8, progress)
+                                 timeout, 8, progress, cancel=cancel)
     return tid, download(urls[0])
 
 

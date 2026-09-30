@@ -37,44 +37,70 @@ def recommend(profile: dict | None, voices: list[dict]) -> list[dict]:
 
 
 # ----------------------------------------------------------------- clips
-def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
+def _unify(pid: str, si: int, ci: int, raw, st: dict, clip: dict):
+    """Cambia la voz del clip a la voz elegida. Devuelve (archivo_final, aviso)."""
+    if not (st.get("unify_voice") and st.get("voice_id") and clip.get("dialogue") and media.probe(raw)["has_audio"]):
+        return raw, None
+    try:
+        aud = media.extract_audio(raw, store.path(pid, "videos", f"s{si:02d}_c{ci}_src.mp3"))
+        if st.get("voice_provider") == "elevenlabs":
+            new = eleven.speech_to_speech(aud, st["voice_id"])
+        else:
+            try:
+                url = kie.upload_file(aud, "audio/mpeg")
+            except Exception:  # noqa: BLE001  - sin URL publica se usa la subida directa
+                url = None
+            new = dubvoice.voice_change(url, st["voice_id"], audio_path=aud)
+        mp3 = store.path(pid, "videos", f"s{si:02d}_c{ci}_voice.mp3")
+        mp3.write_bytes(new)
+        final = store.path(pid, "videos", f"s{si:02d}_c{ci}.mp4")
+        media.mux_audio(raw, mp3, final)
+        return final, None
+    except Exception as e:  # noqa: BLE001  - se conserva la voz original de Veo
+        return raw, f"No se pudo unificar la voz ({str(e)[:300]}). Se conserva la voz de Veo."
+
+
+def retry_voice(pid: str, si: int, ci: int) -> str | None:
+    """Reintenta solo el cambio de voz sobre el clip ya generado. Devuelve el aviso (None si salio bien)."""
+    p = store.get(pid)
+    clip = p["scenes"][si]["clips"][ci]
+    if not clip.get("raw"):
+        raise RuntimeError("Ese clip aun no esta generado.")
+    raw = abs_path(pid, clip["raw"])
+    final, warning = _unify(pid, si, ci, raw, p["settings"], clip)
+    with store.edit(pid) as q:
+        c = q["scenes"][si]["clips"][ci]
+        c.update(file=store.rel(pid, final), warning=warning, duration=media.probe(final)["duration"])
+    return warning
+
+
+def render_clip(pid: str, si: int, ci: int, prog=None, cancel=None, overrides: dict | None = None) -> None:
+    ov = overrides or {}
     p = store.get(pid)
     st = p["settings"]
     clip = p["scenes"][si]["clips"][ci]
     if not (p["scenes"][si].get("image") or {}).get("approved"):
         raise RuntimeError(f"La imagen de la escena {si + 1} no esta aprobada.")
+    model = ov.get("model") or st["dubvoice_video_model"]
+    duration = ov.get("duration") or clip.get("target")
+    prompt = ov.get("prompt") or clip["video_prompt"]
     with store.edit(pid) as q:
         c = q["scenes"][si]["clips"][ci]
-        c.update(status="running", error=None, warning=None)
+        c.update(status="running", error=None, warning=None, audit=None, verified=None)
+        if ov.get("prompt"):
+            c["video_prompt"] = ov["prompt"]
     try:
         pg = (lambda m: prog(m)) if prog else None
-        task, data = dubvoice.veo(clip["video_prompt"], abs_path(pid, p["scenes"][si]["image"]["file"]),
-                                  model=st["dubvoice_video_model"], progress=pg, duration=clip.get("target"))
+        task, data = dubvoice.veo(prompt, abs_path(pid, p["scenes"][si]["image"]["file"]), model=model, progress=pg,
+                                  duration=duration, cancel=cancel)
         raw = store.path(pid, "videos", f"s{si:02d}_c{ci}_raw.mp4")
         raw.write_bytes(data)
-        final, warning = raw, None
-        if st.get("unify_voice") and st.get("voice_id") and clip.get("dialogue") and media.probe(raw)["has_audio"]:
-            try:
-                aud = media.extract_audio(raw, store.path(pid, "videos", f"s{si:02d}_c{ci}_src.mp3"))
-                if st.get("voice_provider") == "elevenlabs":
-                    new = eleven.speech_to_speech(aud, st["voice_id"])
-                else:
-                    try:
-                        url = kie.upload_file(aud, "audio/mpeg")
-                    except Exception:  # noqa: BLE001  - sin URL publica se usa la subida directa
-                        url = None
-                    new = dubvoice.voice_change(url, st["voice_id"], audio_path=aud)
-                mp3 = store.path(pid, "videos", f"s{si:02d}_c{ci}_voice.mp3")
-                mp3.write_bytes(new)
-                final = store.path(pid, "videos", f"s{si:02d}_c{ci}.mp4")
-                media.mux_audio(raw, mp3, final)
-            except Exception as e:  # noqa: BLE001  - se conserva la voz original de Veo
-                final, warning = raw, f"No se pudo unificar la voz ({e}). Se conserva la voz de Veo."
+        final, warning = _unify(pid, si, ci, raw, st, clip)
         info = media.probe(final)
         with store.edit(pid) as q:
             c = q["scenes"][si]["clips"][ci]
-            c.update(status="done", file=store.rel(pid, final), raw=store.rel(pid, raw), task_id=task,
-                     asked_seconds=dubvoice.tier_for(clip.get("target") or 8, st["dubvoice_video_model"]),
+            c.update(status="done", file=store.rel(pid, final), raw=store.rel(pid, raw), task_id=task, model_used=model,
+                     asked_seconds=dubvoice.tier_for(duration or 8, model),
                      duration=info["duration"], stale=False, warning=warning, error=None)
     except Exception as e:  # noqa: BLE001
         with store.edit(pid) as q:

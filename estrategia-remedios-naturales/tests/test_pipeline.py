@@ -102,7 +102,7 @@ def client():
     dubvoice.voice_change = lambda url, vid, progress=None, audio_path=None: _mp3(8)
     gemini.generate_image = lambda prompt, refs, model, aspect="9:16": _jpg()
     kie.upload_image = lambda path: "https://example.com/x.jpg"
-    dubvoice.veo = lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None: ("task1", fake_video(prompt))
+    dubvoice.veo = lambda prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None, cancel=None: ("task1", fake_video(prompt))
     from app.main import app
     return TestClient(app)
 
@@ -477,3 +477,99 @@ def test_dubvoice_video_progress_and_timeout(monkeypatch, tmp_path):
     except RuntimeError as e:
         assert "no termino en 10 min" in str(e)
     assert any("generando" in m for m in msgs)
+
+
+def test_supervisor_retries_failures_audits_and_finishes(client, monkeypatch):
+    """Supervisor Claude: un clip falla (politica de contenido), Claude reescribe el prompt y reintenta; todo termina aceptado."""
+    from app.phases import supervisor
+    from app import store
+    pid = client.post("/api/projects", json={"name": "sup"}).json()["id"]
+    img = store.path(pid, "images", "i.jpg"); Image.new("RGB", (100, 180)).save(img)
+    dlg = "ginger tea can calm your stomach"
+    with store.edit(pid) as q:
+        q["settings"].update(unify_voice=False, output_language="en", dubvoice_video_model="veo-3.1-fast")
+        q["scenes"] = [{"idx": i, "image": {"file": store.rel(pid, img), "approved": True}, "frame": store.rel(pid, img),
+                        "clips": [{"idx": 0, "dialogue": dlg, "video_prompt": "orig prompt", "target": 6, "status": "pending", "lang": "en"}]}
+                       for i in range(2)]
+    calls = {"veo": []}
+
+    def fake_veo(prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None, cancel=None):
+        calls["veo"].append(prompt)
+        if prompt == "orig prompt" and len([c for c in calls["veo"] if c == "orig prompt"]) == 1:
+            raise RuntimeError("DubVoice (video) fallo: content policy violation")
+        return "t", fake_video(prompt)
+
+    def fake_sup(content, *, system="", model="", max_tokens=0):
+        txt = content[-1]["text"]
+        assert txt.startswith("ESTADO"), txt[:80]
+        state = json.loads(txt.split("\n", 1)[1].split("\n\nEVENTOS")[0])
+        acts = []
+        for row in state:
+            if row["state"] == "failed":
+                acts.append({"do": "retry", "scene": row["scene"], "clip": row["clip"], "reason": "politica", "prompt": "simplified prompt"})
+        for m in re.findall(r"E(\d+)C(\d+)", txt.split("CLIPS PENDIENTES DE TU REVISION")[1].split("\n")[0]):
+            acts.append({"do": "accept", "scene": int(m[0]), "clip": int(m[1])})
+        return {"analysis": "ok", "actions": acts}
+
+    monkeypatch.setattr(dubvoice, "veo", fake_veo)
+    monkeypatch.setattr(claude, "ask_json", fake_sup)
+    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
+        "text": dlg, "words": [{"text": w, "start": i * .5, "end": i * .5 + .4} for i, w in enumerate(dlg.split())]})
+    supervisor.start(pid, lambda msg=None, progress=None: None)
+    p = store.get(pid)
+    clips = [c for s in p["scenes"] for c in s["clips"]]
+    assert all(c["status"] == "done" and c["verified"] for c in clips)
+    assert "simplified prompt" in calls["veo"] and any(c["video_prompt"] == "simplified prompt" for c in clips)   # cual clip falla primero depende del paralelismo
+    log = " ".join(x["msg"] for x in p["jobs"]["supervisor"]["log"])
+    assert "Reintento" in log and "Aceptado" in log and "Terminado: 2/2" in log
+
+
+def _setup_sup_project(client, n=2, dlg="ginger tea can calm your stomach"):
+    from app import store
+    pid = client.post("/api/projects", json={"name": "sup2"}).json()["id"]
+    img = store.path(pid, "images", "i.jpg"); Image.new("RGB", (100, 180)).save(img)
+    with store.edit(pid) as q:
+        q["settings"].update(unify_voice=False, output_language="en", dubvoice_video_model="veo-3.1-fast")
+        q["scenes"] = [{"idx": i, "image": {"file": store.rel(pid, img), "approved": True}, "frame": store.rel(pid, img),
+                        "clips": [{"idx": 0, "dialogue": dlg, "video_prompt": "p", "target": 6, "status": "pending", "lang": "en"}]}
+                       for i in range(n)]
+    return pid
+
+
+def test_supervisor_autopilot_when_claude_is_down(client, monkeypatch):
+    """Sin Claude el supervisor no se cuelga: reintenta fallos y acepta lo que pasa la auditoria basica."""
+    from app.phases import supervisor
+    from app import store
+    pid = _setup_sup_project(client)
+    n = {"i": 0}
+
+    def flaky_veo(prompt, image_path, model="veo-3.1-fast", aspect="9:16", resolution="720p", progress=None, timeout=0, duration=None, cancel=None):
+        n["i"] += 1
+        if n["i"] == 1:
+            raise RuntimeError("503 servicio caido")
+        return "t", fake_video(prompt)
+
+    def down(*a, **k): raise RuntimeError("Anthropic respondio 529")
+
+    monkeypatch.setattr(dubvoice, "veo", flaky_veo)
+    monkeypatch.setattr(claude, "ask_json", down)
+    monkeypatch.setattr(stt, "transcribe", lambda audio, settings=None, language_code=None: {
+        "text": "ginger tea can calm your stomach", "words": []})
+    supervisor.start(pid, lambda msg=None, progress=None: None)
+    clips = [c for s in store.get(pid)["scenes"] for c in s["clips"]]
+    assert all(c["status"] == "done" and c["verified"] for c in clips)
+
+
+def test_supervisor_gives_up_after_max_attempts(client, monkeypatch):
+    import pytest
+    from app.phases import supervisor
+    from app import store
+    pid = _setup_sup_project(client, n=1)
+
+    def always_fail(prompt, image_path, **k): raise RuntimeError("content policy")
+
+    monkeypatch.setattr(dubvoice, "veo", always_fail)
+    monkeypatch.setattr(claude, "ask_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    with pytest.raises(RuntimeError, match="sin resolver"):
+        supervisor.start(pid, lambda msg=None, progress=None: None)
+    assert store.get(pid)["scenes"][0]["clips"][0]["status"] == "error"

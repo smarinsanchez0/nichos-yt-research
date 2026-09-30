@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from . import config, jobs, media, store
-from .phases import analysis, avatar, editing, fragment, images, videos
+from .phases import analysis, avatar, editing, fragment, images, supervisor, videos
 from .services import dubvoice, eleven
 
 app = FastAPI(title="ESTRATEGIA REMEDIOS NATURALES")
@@ -287,6 +287,25 @@ def gen_videos(pid: str, body: dict = Body(default={})):
     pairs = [(int(a), int(b)) for a, b in pairs]
     _need(bool(pairs), "Todos los clips estan listos")
     return _start(pid, "videos", lambda prog: videos.render_many(pid, prog, pairs))
+
+
+@app.post("/api/projects/{pid}/supervisor/start")
+def supervisor_start(pid: str):
+    p = P(pid)
+    _need(bool(p["scenes"]) and all(s.get("clips") for s in p["scenes"]), "Completa la Fase 4 primero")
+    _need(all((s.get("image") or {}).get("approved") for s in p["scenes"]), "Aprueba todas las imagenes de la Fase 3")
+    if p["settings"].get("unify_voice"):
+        _need(bool(p["settings"].get("voice_id")), "Elige una voz (o desactiva 'unificar voz')")
+    with store.edit(pid) as q:
+        q["jobs"].pop("supervisor", None)
+    return _start(pid, "supervisor", lambda prog: supervisor.start(pid, prog))
+
+
+@app.post("/api/projects/{pid}/supervisor/stop")
+def supervisor_stop(pid: str):
+    P(pid)
+    supervisor.stop(pid)
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/videos/{i}/{j}/regenerate")

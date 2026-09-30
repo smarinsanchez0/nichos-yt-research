@@ -30,6 +30,12 @@ La barra superior muestra cuáles detectó (nunca se muestran completas).
 
 Salida: `data/projects/<id>/final/reel_final.mp4` (1080×1920).
 
+## Supervisor Claude (Fase 5, 1 clic)
+`app/phases/supervisor.py`: lanza todos los clips (máx. 3 en paralelo, respetando el límite de DubVoice), audita cada resultado
+(duración, audio, texto hablado vs diálogo, 3 fotogramas comparados con la imagen aprobada) y Claude decide: aceptar, reintentar con otro
+prompt/modelo/duración, cancelar atascos o descartar. Límites duros: 3 intentos por clip, presupuesto de créditos, 12 min por clip, 75 min en total.
+Si Claude no responde pasa a piloto automático. La bitácora se ve en vivo en la app.
+
 ## Método de la guía (guia_creacion_video_IA)
 Los 3 meta-prompts están en `app/phases/metaprompts.py`: Claude mira la CAPTURA de cada clip y escribe el prompt.
 1. Clip 1 (start frame): Nano Banana Pro recibe captura + avatar. Se revisa/retoca/aprueba antes de seguir.
