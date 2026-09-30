@@ -30,5 +30,6 @@ Salida: `data/projects/<id>/final/reel_final.mp4` (1080×1920).
 ## Estado real de la verificación
 - Verificado: lógica completa, ffmpeg (escenas, recorte de silencios, subtítulos), interfaz y flujo de 6 fases con servicios **simulados**.
 - **No verificado contra las APIs reales** (no había keys en este entorno): formato exacto de respuestas de Kie.ai (Veo, subida de imagen), ElevenLabs y Gemini. Si algo falla, el error sale en pantalla con el detalle y se corrige en `app/services/`.
-- DubVoice y Pexels: la key se detecta pero aún no se usan.
+- DubVoice (imagen `nano-banana-2` y video `veo-3.1-fast`, 9:16, imagen inicial en base64) está integrado como proveedor opcional, más barato. La ruta exacta para consultar el estado del video no está en su documentación pública: el adaptador prueba rutas conocidas; si falla, el error lo dice.
+- Pexels: la key se detecta pero aún no se usa.
 - Veo genera clips de 8 s: los diálogos se parten en tramos de ≤6.8 s y luego se recortan a lo hablado.

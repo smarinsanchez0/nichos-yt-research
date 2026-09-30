@@ -4,7 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import media, store
-from ..services import eleven, kie
+from ..services import dubvoice, eleven, kie
 from .common import abs_path
 
 
@@ -59,9 +59,12 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
         c = q["scenes"][si]["clips"][ci]
         c.update(status="running", error=None, warning=None)
     try:
-        url = _image_url(pid, si)
-        task, data = kie.veo_generate(clip["video_prompt"], url, model=st["video_model"],
-                                      progress=(lambda m: prog(m)) if prog else None)
+        pg = (lambda m: prog(m)) if prog else None
+        if st.get("video_provider") == "dubvoice":
+            task, data = dubvoice.veo(clip["video_prompt"], abs_path(pid, p["scenes"][si]["image"]["file"]),
+                                      model=st["dubvoice_video_model"], progress=pg)
+        else:
+            task, data = kie.veo_generate(clip["video_prompt"], _image_url(pid, si), model=st["video_model"], progress=pg)
         raw = store.path(pid, "videos", f"s{si:02d}_c{ci}_raw.mp4")
         raw.write_bytes(data)
         final, warning = raw, None

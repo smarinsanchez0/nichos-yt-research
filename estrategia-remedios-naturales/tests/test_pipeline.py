@@ -184,3 +184,35 @@ def test_full_pipeline(client):
     assert "Poppins" in ass and r"\c&H00FFFF&" in ass and "GINGER" in ass
     assert p["final"]["script_match"] > 0.9
     print("duracion final", info["duration"], "de", total_raw, "escenas", n)
+
+
+def test_dubvoice_adapter(monkeypatch, tmp_path):
+    """El adaptador de DubVoice envia refs en base64, sondea y descarga (HTTP simulado)."""
+    from app.services import dubvoice
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+    img = tmp_path / "a.jpg"
+    img.write_bytes(_jpg())
+    calls = []
+
+    class R:
+        def __init__(self, code, j): self.status_code, self._j, self.text = code, j, str(j)
+        def json(self): return self._j
+
+    def fake_request(method, url, **kw):
+        calls.append((method, url, kw))
+        if method == "POST" and url.endswith("/api/v1/video"):
+            assert kw["json"]["aspect_ratio"] == "9:16" and kw["json"]["ref_images"][0].startswith("data:image/jpeg;base64,")
+            return R(200, {"task_id": "abc"})
+        if url.endswith("/api/v1/video"):
+            return R(200, {"status": "completed", "result": "https://x/v.mp4"})
+        if url.endswith("/api/image-generate"):
+            return R(200, {"success": True, "id": "img1"})
+        if url.endswith("/status"):
+            return R(200, {"status": "succeeded", "image_url": "https://x/i.png"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr(dubvoice, "request", fake_request)
+    monkeypatch.setattr(dubvoice, "download", lambda u: b"DATA:" + u.encode())
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    assert dubvoice.veo("p", img)[1] == b"DATA:https://x/v.mp4"
+    assert dubvoice.image("p", [img]) == b"DATA:https://x/i.png"

@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 from .. import store
-from ..services import gemini, kie
+from ..services import dubvoice, gemini, kie
 from .common import abs_path
 
 RULES = ("Photorealistic vertical 9:16 photograph, shot like authentic smartphone/UGC content, real skin texture, natural "
@@ -47,6 +47,9 @@ def _compose_edit(p: dict, s: dict, notes: str) -> tuple[str, list[tuple[str, ob
 
 def _call(p: dict, prompt: str, refs) -> bytes:
     st = p["settings"]
+    if st["image_provider"] == "dubvoice":
+        labelled = prompt + "\nReferences in order: " + " | ".join(l for l, _ in refs)
+        return dubvoice.image(labelled, [r for _, r in refs], model=st["dubvoice_image_model"])
     if st["image_provider"] == "kie":
         labelled = prompt + "\nReferences in order: " + " | ".join(l for l, _ in refs)
         return kie.nano_banana_edit(labelled, [r for _, r in refs], model=st["kie_image_model"])

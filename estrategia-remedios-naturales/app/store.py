@@ -20,6 +20,9 @@ DEFAULT_SETTINGS = {
     "image_model": "gemini-2.5-flash-image",  # Nano Banana
     "kie_image_model": "google/nano-banana-edit",
     "video_model": "veo3_fast",
+    "video_provider": "kie",                # kie | dubvoice
+    "dubvoice_image_model": "nano-banana-2",
+    "dubvoice_video_model": "veo-3.1-fast",
     "unify_voice": True,
     "voice_id": None,
     "voice_name": None,
