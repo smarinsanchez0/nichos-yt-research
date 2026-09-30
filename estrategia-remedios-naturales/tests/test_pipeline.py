@@ -387,3 +387,39 @@ def test_guide_chain_uses_previous_image_as_reference(client):
     prompt, refs = images._compose_guide(p, p["scenes"][1], "que sonria")
     assert [l.split(" -")[0] for l, _ in refs] == ["Image A", "Image B", "Image C"]
     assert refs[1][1].name == "g0.jpg" and prompt.startswith("P1") and "que sonria" in prompt
+
+
+def test_variable_duration_tiers():
+    importlib_reload = __import__("importlib").reload
+    importlib_reload(dubvoice)
+    assert [dubvoice.tier_for(x) for x in (2.5, 3.9, 4.1, 5.5, 7, 8.2, 12)] == [4, 4, 6, 6, 8, 10, 10]
+    assert dubvoice.tier_for(3, "veo-3.1-fast") == 8            # Veo siempre 8 s
+    assert dubvoice.credits_for("omniflash", 3) == 4688 and dubvoice.credits_for("veo-3.1-fast", 3) == 7500
+
+
+def test_omniflash_sends_duration(monkeypatch, tmp_path):
+    import importlib
+    importlib.reload(dubvoice)
+    monkeypatch.setenv("DUBVOICE_API_KEY", "sk_test")
+    img = tmp_path / "a.jpg"; img.write_bytes(_jpg())
+    sent = {}
+
+    class R:
+        status_code = 200
+        text = "x"
+        def __init__(self, j): self._j = j
+        def json(self): return self._j
+
+    def fake(method, url, **kw):
+        if method == "POST":
+            sent.update(kw["json"]); return R({"task_id": "t"})
+        return R({"status": "completed", "result": "https://x/v.mp4"})
+
+    monkeypatch.setattr(dubvoice, "request", fake)
+    monkeypatch.setattr(dubvoice, "download", lambda u: b"V")
+    monkeypatch.setattr(dubvoice.time, "sleep", lambda s: None)
+    dubvoice.veo("p", img, model="omniflash", duration=3.2)
+    assert sent["model"] == "omniflash" and sent["duration"] == 4
+    dubvoice._poll_cache.clear(); sent.clear()
+    dubvoice.veo("p", img, model="veo-3.1-fast", duration=3.2)
+    assert "duration" not in sent

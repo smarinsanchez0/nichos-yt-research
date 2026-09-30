@@ -19,6 +19,7 @@ DONE = {"completed", "succeeded", "success", "done", "finished"}
 FAILED = {"failed", "error", "fail", "cancelled"}
 
 # creditos publicados (docs API) - para el estimador de costo
+OMNI_TIERS = {4: 4688, 6: 6250, 8: 7813, 10: 9375}     # omniflash 720p por duracion (360p cuesta la mitad)
 CREDITS = {"veo-3.1-fast": 7500, "veo-3.1-lite": 9100, "veo-3.1": 17000, "meta": 2000,
            "nano-banana-2-lite": 500, "nano-banana-2": 1000, "nano-banana-pro": 3500, "grok-image": 1000}
 
@@ -151,10 +152,28 @@ def _submit_and_wait(service: str, path: str, body: dict, poll_candidates: list[
     return tid, _wait(get, service, timeout, interval)
 
 
+def tier_for(seconds: float, model: str = "omniflash") -> int:
+    """Duracion que se pide: la menor disponible que cubre `seconds`. Veo siempre genera 8 s; Omni Flash 4/6/8/10."""
+    if model != "omniflash":
+        return 8
+    for t in sorted(OMNI_TIERS):
+        if seconds <= t:
+            return t
+    return 10
+
+
+def credits_for(model: str, seconds: float) -> int:
+    if model == "omniflash":
+        return OMNI_TIERS[tier_for(seconds, model)]
+    return CREDITS.get(model, 7500)
+
+
 def veo(prompt: str, image_path: Path, model: str = "veo-3.1-fast", aspect: str = "9:16",
-        resolution: str = "720p", progress=None, timeout: float = 1200) -> tuple[str, bytes]:
+        resolution: str = "720p", progress=None, timeout: float = 1200, duration: float | None = None) -> tuple[str, bytes]:
     body = {"prompt": prompt, "model": model, "aspect_ratio": aspect, "resolution": resolution,
             "ref_images": [data_uri(image_path, 1600)], "mode_image": "frame"}
+    if model == "omniflash":
+        body["duration"] = tier_for(duration or 8, model)
     tid, urls = _submit_and_wait("DubVoice (video)", "/api/v1/video", body,
                                  [("/api/v1/video", "task_id"), ("/api/v1/video", "id"), ("/api/v1/video/status", "task_id")],
                                  timeout, 8, progress)

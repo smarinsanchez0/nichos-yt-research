@@ -62,7 +62,7 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
         pg = (lambda m: prog(m)) if prog else None
         if st.get("video_provider") == "dubvoice":
             task, data = dubvoice.veo(clip["video_prompt"], abs_path(pid, p["scenes"][si]["image"]["file"]),
-                                      model=st["dubvoice_video_model"], progress=pg)
+                                      model=st["dubvoice_video_model"], progress=pg, duration=clip.get("target"))
         else:
             task, data = kie.veo_generate(clip["video_prompt"], _image_url(pid, si), model=st["video_model"], progress=pg)
         raw = store.path(pid, "videos", f"s{si:02d}_c{ci}_raw.mp4")
@@ -85,6 +85,8 @@ def render_clip(pid: str, si: int, ci: int, prog=None) -> None:
         with store.edit(pid) as q:
             c = q["scenes"][si]["clips"][ci]
             c.update(status="done", file=store.rel(pid, final), raw=store.rel(pid, raw), task_id=task,
+                     asked_seconds=(dubvoice.tier_for(clip.get("target") or 8, st["dubvoice_video_model"])
+                                    if st.get("video_provider") == "dubvoice" else 8),
                      duration=info["duration"], stale=False, warning=warning, error=None)
     except Exception as e:  # noqa: BLE001
         with store.edit(pid) as q:
@@ -108,3 +110,20 @@ def render_many(pid: str, prog, pairs: list[tuple[int, int]]) -> None:
         list(ex.map(one, pairs))
     if errors:
         raise RuntimeError(" | ".join(errors)[:900])
+
+
+def estimate(p: dict) -> dict:
+    """Creditos estimados de DubVoice segun la duracion que pedira cada clip vs. 8 s fijos."""
+    st = p["settings"]
+    model = st["dubvoice_video_model"]
+    rows, total, fixed = [], 0, 0
+    for s in p["scenes"]:
+        for c in s.get("clips", []):
+            t = float(c.get("target") or 8)
+            secs = dubvoice.tier_for(t, model) if st.get("video_provider") == "dubvoice" else 8
+            cr = dubvoice.credits_for(model, t) if st.get("video_provider") == "dubvoice" else None
+            rows.append({"scene": s["idx"], "clip": c["idx"], "needed": round(t, 1), "asked": secs, "credits": cr})
+            total += cr or 0
+            fixed += dubvoice.CREDITS.get("veo-3.1-fast", 7500)
+    return {"clips": rows, "total_credits": total, "veo_fast_credits": fixed,
+            "variable": st.get("video_provider") == "dubvoice" and model == "omniflash"}

@@ -67,16 +67,16 @@ def run(pid: str, prog) -> None:
         chunks = chunk_words(ws, lang)
         clips = []
         if not chunks:
-            clips.append({"dialogue": "", "dialogue_en": "", "lang": lang, "t_start": s["start"], "t_end": s["end"], "target": min(dur, 8.0)})
+            clips.append({"dialogue": "", "dialogue_en": "", "lang": lang, "t_start": s["start"], "t_end": s["end"], "target": round(min(dur, 10.0), 2)})
         for k, ch in enumerate(chunks):
             sp = ch[-1]["end"] - ch[0]["start"]
-            target = sp + 0.7
+            target = sp * (1.25 if lang == "es" else 1.0) + 0.8   # el español dura ~25% mas; margen para no cortar palabras
             if len(chunks) == 1:
                 target = max(target, dur)
             clips.append({"dialogue": " ".join(w["text"] for w in ch), "dialogue_en": " ".join(w["text"] for w in ch),
                           "lang": lang, "t_start": ch[0]["start"],
                           "t_end": ch[-1]["end"], "words": [ws.index(ch[0]), ws.index(ch[-1])],
-                          "target": round(min(target, 8.0), 2)})
+                          "target": round(min(target, 10.0), 2)})
         plan.append(clips)
 
     B = 5

@@ -269,6 +269,11 @@ def get_voices(pid: str):
             "selected": p["settings"].get("voice_id")}
 
 
+@app.get("/api/projects/{pid}/videos/estimate")
+def videos_estimate(pid: str):
+    return videos.estimate(P(pid))
+
+
 @app.post("/api/projects/{pid}/videos/generate")
 def gen_videos(pid: str, body: dict = Body(default={})):
     p = P(pid)
