@@ -59,6 +59,8 @@ _SPEC = [   # atributo, VARIABLE_DE_ENTORNO, valor por defecto
     ("rate_limit_max_hits", "F5_RATE_LIMIT_MAX_HITS", 8),
     ("post_workers", "F5_POST_WORKERS", 2),
     ("audit_workers", "F5_AUDIT_WORKERS", 1),
+    ("single_post", "F5_SINGLE_POST", False),                              # modo canario: un clip NUNCA puede tener mas de UN intento/POST por ronda
+    ("skip_voice", "F5_SKIP_VOICE", False),                                # no cambiar la voz (audio_state=NEEDS_FIX; se repite luego con retry_voice)
     ("claude_qc", "F5_CLAUDE_QC", True),
     ("contract_canary", "F5_CONTRACT_CANARY", True),                   # 1er job de un proveedor sin contrato verificado va SOLO
     ("watchdog_margin", "F5_WATCHDOG_MARGIN", 60.0),
@@ -96,6 +98,8 @@ class F5Config:
     rate_limit_max_hits: int = 8
     post_workers: int = 2
     audit_workers: int = 1
+    single_post: bool = False
+    skip_voice: bool = False
     claude_qc: bool = True
     contract_canary: bool = True
     watchdog_margin: float = 60
@@ -339,7 +343,7 @@ def new_attempt(pid: str, si: int, ci: int, *, provider: str, model: str | None,
     with clip_edit(pid, si, ci) as (_, clip, f5):
         n = len(f5["attempts"]) + 1
         att = {"id": f"a{n}", "n": n, "round": f5["round"], "provider": provider, "model": model, "job_id": None,
-               "status": "SUBMITTING", "created_at": now(), "submitted_at": None, "last_polled_at": None, "completed_at": None,
+               "status": "SUBMITTING", "created_at": now(), "submit_started_at": now(), "submitted_at": None, "last_polled_at": None, "completed_at": None,
                "polls": 0, "error_type": None, "error_message": None, "prompt": prompt, "prompt_rewritten": bool((extra or {}).get("rewritten")),
                "target_duration": f5.get("target_duration"), "asked_seconds": asked, "provider_duration": None,
                "credits": credits, "refund_assumed": False, "paid": False, "submit_ambiguous": False, "possible_duplicate": False,
@@ -1074,6 +1078,9 @@ class ClipDriver:
         """UNICA puerta hacia un POST de creacion. Invariante: jamas se envia otro job mientras haya un envio AMBIGUO sin resolver en esta ronda
         (solo F5_AMBIGUOUS_SUBMIT_RETRIES>0, desactivado por defecto, o una accion explicita con paid=1 —que abre ronda nueva— lo permiten)."""
         f5 = self.f5()
+        if self.cfg.single_post and any(not a.get("legacy") and a.get("round") == f5["round"] for a in f5["attempts"]):
+            raise _Stop("CANARY_SINGLE_POST", "PROVIDER", "Modo canario (F5_SINGLE_POST): ya hubo un envio en esta ronda; NO se encadena un segundo POST. "
+                        "Revise el resultado del primero.")
         unresolved = [a for a in f5["attempts"] if a.get("round") == f5["round"] and not a.get("job_id") and a.get("status") in ("AMBIGUOUS", "RECONCILING")]
         if unresolved and plan.reason != "AMBIGUOUS_SUBMIT_RETRY":
             raise _Stop("AMBIGUOUS_SUBMIT", "REMOTE", "Hay un envio ambiguo sin resolver: NO se envia otro job (riesgo de doble cobro).")
@@ -1145,9 +1152,11 @@ class ClipDriver:
             if resume_job is None:
                 att = new_attempt(self.pid, self.si, self.ci, provider=provider, model=plan.model, prompt=plan.prompt,
                                   asked=self._asked_seconds(plan), credits=plan.credits, extra={"rewritten": plan.rewritten, "plan_reason": plan.reason})
-                run.log(f"⏳ Enviando {self.label} a {provider} (intento {att['n']})" + (" con prompt reescrito" if plan.rewritten else ""))
+                run.log(f"⏳ SUBMITTING {self.label} → {provider}/{plan.model} (intento {att['n']}; POST con lectura hasta {int(limits['submission'])} s)"
+                        + (" con prompt reescrito" if plan.rewritten else ""))
             else:
                 att = resume_job
+                patch_attempt(self.pid, self.si, self.ci, att["id"], resumed=True)       # tiempo no observado de principio a fin: no es "tiempo de generacion"
                 if att.get("submitted_at"):
                     limits["processing"] = max(2 * cfg.poll_interval + 5, min(limits["processing"], cfg.processing_timeout - (now() - att["submitted_at"])))
             att_id = att["id"]
@@ -1207,7 +1216,7 @@ class ClipDriver:
     def _recorder(self, provider: str, att_id: str):
         try:
             from ..services import dubvoice
-            return dubvoice.ContractRecorder(self.pid, provider, self.si, self.ci, att_id, on_verified=None)
+            return dubvoice.ContractRecorder(self.pid, provider, self.si, self.ci, att_id, on_verified=None, notify=self.run.log)
         except Exception:  # noqa: BLE001
             return None
 
@@ -1218,10 +1227,12 @@ class ClipDriver:
             with clip_edit(self.pid, self.si, self.ci) as (_, clip, f5):
                 for a in f5["attempts"]:
                     if a["id"] == att_id:
-                        a.update(job_id=job_id, status="SUBMITTED", submitted_at=now(), paid=True)
+                        a.update(job_id=job_id, status="SUBMITTED", submitted_at=now(), submit_response_at=now(), paid=True)
                         if meta:
                             if meta.get("result_url"):
-                                a["result_url"] = meta["result_url"]
+                                a["result_url"] = meta["result_url"]                                  # estado PRIVADO (hace falta para descargar)
+                                a["result_url_redacted"] = errors.scrub(meta["result_url"], 300)       # lo unico que se muestra/registra
+                                a["remote_completed_at"] = now()                                       # POST sincrono: la respuesta ya trae el resultado
                             if meta.get("resolved_by"):
                                 a["job_id_resolved_by"] = meta["resolved_by"]
                 if f5["state"] in (PENDING, RETRY_PENDING):
@@ -1278,10 +1289,12 @@ class ClipDriver:
                     f5w["free_recovery_done"] = True
                 raise _Stop("ADOPTION_REJECTED", "REMOTE", "El video remoto NO pasa la verificacion de identidad (" + "; ".join(evidence.get("failed", [])) +
                             "). No se asocia a este clip; el archivo queda guardado aparte.")
-        patch_attempt(self.pid, self.si, self.ci, att_id, status="DOWNLOADED", completed_at=now(), raw=rel, job_id=job_id, paid=True,
-                      provider_duration=round(info["duration"], 2))
+        patch_attempt(self.pid, self.si, self.ci, att_id, status="DOWNLOADED", completed_at=now(), download_completed_at=now(), raw=rel, job_id=job_id,
+                      paid=True, provider_duration=round(info["duration"], 2))
         transition(self.pid, self.si, self.ci, VALIDATING, note="raw guardado", legacy={"raw": rel, "task_id": job_id}, needs_reconcile=False)
-        self.run.log(f"💾 {self.label}: RAW guardado ({round(info['duration'], 1)} s) — slot liberado, sigue validacion")
+        tgt = self.f5().get("target_duration")
+        self.run.log(f"💾 {self.label}: RAW descargado y guardado · provider_duration={round(info['duration'], 2)} s · target_duration={tgt} s "
+                     "(la referencia manda: F6 recortara) — slot liberado, sigue validacion")
 
     def _verify_fingerprint(self, att: dict, raw, duration: float) -> tuple[bool, dict]:
         """Identidad de un video recuperado: duracion esperada del modelo + huella visual (primer fotograma ≈ start frame de ESTA escena y
@@ -1357,8 +1370,9 @@ class ClipDriver:
         # 3) voz unificada — el RAW ya esta a salvo; cualquier fallo aqui solo deja el audio original de Veo
         final, warn = raw, None
         try:
-            if att.get("voice_deferred"):                                   # adopcion con --no-voice: el cambio de voz se hace despues con retry_voice
-                final, warn = raw, "Voz sin unificar (adopcion con --no-voice): repita el cambio de voz con retry_voice; el RAW esta guardado."
+            st_ = store.get(self.pid)["settings"]
+            if (att.get("voice_deferred") or cfg.skip_voice) and st_.get("unify_voice") and st_.get("voice_id"):   # --no-voice / F5_SKIP_VOICE: voz despues (retry_voice)
+                final, warn = raw, "Voz sin unificar (--no-voice / F5_SKIP_VOICE): repita el cambio de voz con retry_voice; el RAW esta guardado."
             else:
                 final, warn = run_bounded(lambda: videos.finish_clip(self.pid, self.si, self.ci, raw), cfg.post_timeout, self.cancel, "voz")
         except Cancelled:
@@ -1416,6 +1430,8 @@ class ClipDriver:
         audio_state, issue = evaluate_audio(res.get("audit"), clip, res.get("voice_warning"), res.get("audit_error"))
         warn = "; ".join(x for x in (res.get("voice_warning"), (f"Audio por revisar: {issue}" if audio_state == "NEEDS_FIX" and not res.get("voice_warning") else None)) if x) or None
         patch_attempt(self.pid, self.si, self.ci, att_id, status="VALIDATED", qc=res.get("qc"), completed_at=now())
+        self.run.log(f"🔍 QC {self.label}: visual {'OK' if res.get('qc') is None or res['qc'].get('visual_ok') else 'RECHAZADO'}"
+                     + (" (QC de Claude desactivado)" if res.get("qc") is None else "") + f" · audio: {audio_state}")
         legacy = {"file": store.rel(self.pid, final), "raw": att["raw"], "duration": res["duration"], "task_id": att.get("job_id"),
                   "provider_used": att["provider"], "model_used": att.get("model"), "asked_seconds": att.get("asked_seconds"),
                   "verified": True if res.get("qc") else None, "warning": warn, "video_prompt": att.get("prompt") or clip.get("video_prompt"),
@@ -1535,7 +1551,7 @@ class ClipDriver:
                 break
             self.sleep(cfg.reconcile_interval)
         if verdict == "MATCH" and cand:
-            patch_attempt(self.pid, self.si, self.ci, att["id"], job_id=str(cand["id"]), status="SUBMITTED", submitted_at=now(), paid=True,
+            patch_attempt(self.pid, self.si, self.ci, att["id"], job_id=str(cand["id"]), status="SUBMITTED", submitted_at=now(), reconciled_at=now(), paid=True,
                           possible_duplicate=True, result_url=cand.get("result_url"), reconciled=True, needs_fingerprint=True,
                           reconcile_evidence=errors.sanitize({"candidate": {k: cand.get(k) for k in ("id", "model", "created_at", "status", "duration")},
                                                               "reasons": reasons}), error_type=None, error_message=None)
@@ -1651,6 +1667,38 @@ def recover_after_restart(p: dict, active: set | None = None) -> int:
     return changed
 
 
+def attempt_timing(a: dict) -> dict:
+    """Semantica de tiempos de UN intento (calculada al leer: no modifica el historial).
+
+    generation_seconds = envio → resultado, SOLO si el ciclo se observo completo en este proceso (sin ambiguedad, reconciliacion, adopcion ni
+    reanudacion). Si el job se recupero despues (adopcion/reconciliacion/reanudacion), el momento real en que el proveedor termino se DESCONOCE:
+    generation_seconds = None y se informa aparte `recovery_delay_seconds` (envio original → recuperacion), que NO es tiempo de generacion."""
+    started = a.get("submit_started_at") or a.get("created_at")
+    recovered = bool(a.get("adopted") or a.get("reconciled") or a.get("resumed") or a.get("resolved_ambiguity"))
+    resp = a.get("submit_response_at") or (a.get("submitted_at") if not recovered else None)
+    dl = a.get("download_completed_at")
+    approx = False
+    if dl is None and a.get("status") in ("DOWNLOADED", "VALIDATED", "REJECTED") and a.get("completed_at"):
+        dl, approx = a["completed_at"], not recovered            # intentos antiguos: completed_at puede incluir post-proceso (aproximado)
+    out = {"submit_started_at": started, "submit_response_at": resp, "remote_completed_at": a.get("remote_completed_at"),
+           "download_completed_at": dl, "adopted_at": a.get("adopted_at"), "reconciled_at": a.get("reconciled_at"),
+           "generation_seconds": None, "recovery_delay_seconds": None, "submit_ack_seconds": None, "timing_note": None}
+    if recovered:
+        end = a.get("adopted_at") or a.get("reconciled_at") or dl
+        if started and end:
+            out["recovery_delay_seconds"] = round(max(end - started, 0.0), 1)
+        out["timing_note"] = "recuperado despues del envio: se desconoce cuanto tardo el proveedor"
+        return out
+    if started and resp:
+        out["submit_ack_seconds"] = round(max(resp - started, 0.0), 2)
+    end = a.get("remote_completed_at") or dl
+    if started and end:
+        out["generation_seconds"] = round(max(end - started, 0.0), 2)
+        if approx:
+            out["timing_note"] = "aproximado (incluye post-proceso)"
+    return out
+
+
 # ===================================================================== estado global y telemetria
 OPEN_STATES = {PENDING, SUBMITTED, PROCESSING, VALIDATING, RETRY_PENDING}
 
@@ -1712,6 +1760,7 @@ def summarize(p: dict) -> dict:
     err_types: Counter = Counter()
     prov: dict[str, dict] = {}
     gen_times: list[float] = []
+    recov_times: list[float] = []
     credits = 0
     review, audio_fix, dup = [], [], []
     run = p.get("f5_run") or {}
@@ -1741,8 +1790,11 @@ def summarize(p: dict) -> dict:
                     d["accepted"] += 1
                 if a.get("error_type"):
                     err_types[a["error_type"]] += 1
-                if a.get("submitted_at") and a.get("completed_at") and a.get("status") in ("DOWNLOADED", "VALIDATED", "REJECTED"):
-                    gen_times.append(a["completed_at"] - a["submitted_at"])
+                tm = attempt_timing(a)
+                if tm["generation_seconds"] is not None:
+                    gen_times.append(tm["generation_seconds"])
+                if tm["recovery_delay_seconds"] is not None:
+                    recov_times.append(tm["recovery_delay_seconds"])
                 if a.get("job_id"):
                     confirmed_jobs += 1
                 if a.get("possible_duplicate"):
@@ -1753,7 +1805,7 @@ def summarize(p: dict) -> dict:
             row = {"scene": si + 1, "clip": ci + 1, "state": st, "visual_state": f5.get("visual_state"), "audio_state": f5.get("audio_state"),
                    "target_duration": f5.get("target_duration"), "source_start": f5.get("source_start"), "source_end": f5.get("source_end"),
                    "attempts": [{k: a.get(k) for k in ("id", "provider", "model", "job_id", "status", "submitted_at", "last_polled_at", "completed_at", "polls",
-                                                       "error_type", "error_message", "target_duration", "provider_duration", "credits", "possible_duplicate", "legacy")}
+                                                       "error_type", "error_message", "target_duration", "provider_duration", "credits", "possible_duplicate", "legacy")} | {"timing": attempt_timing(a)}
                                 for a in atts]}
             clips.append(row)
             if st in (NEEDS_REVIEW, FAILED):
@@ -1776,6 +1828,8 @@ def summarize(p: dict) -> dict:
             "credits_balance_delta": (run["credits_before"] - run["credits_after"]) if isinstance(run.get("credits_before"), int) and isinstance(run.get("credits_after"), int) else None,
             "by_phase": phase_counts(p),
             "per_provider": prov, "errors_by_type": dict(err_types),
+            "recovery_delays_seconds": [round(x, 1) for x in recov_times],
+            "max_recovery_delay_seconds": round(max(recov_times), 1) if recov_times else None,
             "avg_generation_seconds": round(sum(gen_times) / len(gen_times), 1) if gen_times else None,
             "max_generation_seconds": round(max(gen_times), 1) if gen_times else None,
             "credits_estimated": credits, "possible_duplicates": dup, "needs_review_list": review, "audio_needs_fix": audio_fix,

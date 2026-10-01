@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 from pathlib import Path
 
@@ -355,7 +356,12 @@ def f5_clip(pid: str, i: int, j: int):
     p = P(pid)
     _need(0 <= i < len(p["scenes"]) and 0 <= j < len(p["scenes"][i].get("clips", [])), "Clip inexistente")
     c = p["scenes"][i]["clips"][j]
-    return video_jobs.ensure(c, p["scenes"][i], p["scenes"][i]["clips"]) if not c.get("f5") else c["f5"]
+    f5 = video_jobs.ensure(c, p["scenes"][i], p["scenes"][i]["clips"]) if not c.get("f5") else c["f5"]
+    f5 = json.loads(json.dumps(f5))
+    for a in f5.get("attempts", []):
+        a.pop("result_url", None)                                 # URL completa (puede llevar firma): estado privado, no se expone
+        a["timing"] = video_jobs.attempt_timing(a)
+    return f5
 
 
 # ------------------------------------------------------------------ fase 6

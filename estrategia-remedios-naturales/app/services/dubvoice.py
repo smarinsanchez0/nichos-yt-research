@@ -261,13 +261,65 @@ def contract_verified() -> bool:
         return False
 
 
+_ID_KEYS_C = ("task_id", "taskid", "id", "job_id", "jobid", "generation_id", "request_id", "operation_id")
+
+
+def extract_contract_fields(j) -> dict:
+    """Todo lo que hace falta para implementar poll/download, SIN valores sensibles: rutas de campos con su tipo, ids, estado, modelo, duracion
+    y las URLs devueltas (host + ruta; la query —donde viajan las firmas/tokens— se descarta)."""
+    keys: dict = {}
+    ids: dict = {}
+    urls: list = []
+    status = model = None
+    durations: dict = {}
+
+    def walk(o, path, depth):
+        nonlocal status, model
+        if depth > 5:
+            return
+        if isinstance(o, dict):
+            for k, v in list(o.items())[:80]:
+                p_ = f"{path}.{k}" if path else str(k)
+                lk = str(k).lower()
+                if isinstance(v, (dict, list)):
+                    keys[p_] = type(v).__name__
+                    walk(v, p_, depth + 1)
+                    continue
+                keys[p_] = type(v).__name__
+                if lk in _ID_KEYS_C and isinstance(v, (str, int)) and v != "":
+                    ids[p_] = str(v)[:80]
+                elif lk in ("status", "state") and isinstance(v, str):
+                    status = {"path": p_, "value": v[:40]}
+                elif lk == "model" and isinstance(v, str):
+                    model = {"path": p_, "value": v[:60]}
+                elif "duration" in lk and isinstance(v, (int, float)):
+                    durations[p_] = v
+                if isinstance(v, str) and v.lower().startswith(("http://", "https://")):
+                    base = v.split("?")[0]
+                    host = base.split("/")[2] if base.count("/") >= 2 else ""
+                    urls.append({"path": p_, "host": host, "redacted": errors.scrub(base, 200), "had_query": "?" in v})
+        elif isinstance(o, list):
+            for i, v in enumerate(o[:10]):
+                p_ = f"{path}[{i}]"
+                if isinstance(v, (dict, list)):
+                    keys[p_] = type(v).__name__
+                    walk(v, p_, depth + 1)
+                elif isinstance(v, str) and v.lower().startswith(("http://", "https://")):
+                    base = v.split("?")[0]
+                    urls.append({"path": p_, "host": base.split("/")[2] if base.count("/") >= 2 else "", "redacted": errors.scrub(base, 200), "had_query": "?" in v})
+
+    walk(j, "", 0)
+    return {"json_keys": keys, "ids": ids, "status": status, "model": model, "durations": durations, "urls": urls}
+
+
 class ContractRecorder:
     """Registra, SANITIZADO, lo que DubVoice realmente responde (status HTTP, forma del JSON, job_id, endpoint de sondeo, estados reales,
     URL final sin firma, tiempos) en data/projects/<id>/f5_contract.jsonl. Nunca escribe claves, headers de peticion, tokens ni base64."""
 
-    def __init__(self, pid: str, provider: str = "dubvoice", si: int = 0, ci: int = 0, att_id: str = "?", on_verified=None):
+    def __init__(self, pid: str, provider: str = "dubvoice", si: int = 0, ci: int = 0, att_id: str = "?", on_verified=None, notify=None):
         self.pid, self.provider, self.si, self.ci, self.att = pid, provider, si, ci, att_id
         self.on_verified = on_verified
+        self.notify = notify                      # callable(str): mensajes legibles en vivo (modo canario)
         self.t0 = time.time()
         self.statuses: list[tuple[float, str]] = []
         self.info: dict = {}
@@ -284,22 +336,39 @@ class ContractRecorder:
             pass
 
     def http(self, op: str, method: str, url: str, req_shape=None, resp=None, error: str | None = None, t0: float | None = None, **extra) -> None:
+        el = (time.time() - t0) if t0 else None
         rec = {"op": op, "method": method, "url": errors.scrub(url, 300), "request_shape": req_shape,
-               "elapsed_ms": int((time.time() - t0) * 1000) if t0 else None}
+               "elapsed_ms": int(el * 1000) if el is not None else None, "elapsed_seconds": round(el, 2) if el is not None else None}
         rec.update(extra)
         if error:
             rec["error"] = errors.scrub(error, 300)
         if resp is not None:
             rec["http_status"] = resp.status_code
-            rec["headers"] = {k: v for k, v in resp.headers.items()
+            hdrs = dict(resp.headers.items())
+            rec["content_type"] = next((v for k, v in hdrs.items() if k.lower() == "content-type"), None)
+            rec["header_names"] = sorted(k.lower() for k in hdrs)                         # solo NOMBRES (descubrir limites/ids); cookies, tokens y similares no se guardan
+            rec["headers"] = {k: v for k, v in hdrs.items()
                               if k.lower() in _KEEP_HEADERS or k.lower().startswith(("x-ratelimit", "ratelimit", "x-rate"))}
+            rec["content_length"] = len(getattr(resp, "content", b"") or b"")
             try:
                 j = resp.json()
                 rec["json_shape"] = errors.shape(j)
+                rec["extracted"] = extract_contract_fields(j)
                 rec["body"] = j
             except Exception:  # noqa: BLE001
                 rec["body_text"] = (getattr(resp, "text", "") or "")[:300]
         self._write(rec)
+        if self.notify and op == "submit":
+            try:
+                if resp is not None:
+                    ex = rec.get("extracted") or {}
+                    self.notify(f"📡 HTTP {rec['http_status']} recibido en {rec['elapsed_seconds']} s · {rec.get('content_type')} · campos: "
+                                f"{', '.join(list((ex.get('json_keys') or {}).keys())[:12]) or '(sin JSON)'}")
+                    self.notify("🧾 contrato capturado (sanitizado) en f5_contract.jsonl")
+                elif error:
+                    self.notify(f"📡 sin respuesta del POST tras {rec['elapsed_seconds']} s · {rec['error'][:120]}")
+            except Exception:  # noqa: BLE001
+                pass
 
     def note(self, kind: str, **data) -> None:
         self._write({"op": kind, **data})

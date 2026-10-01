@@ -32,3 +32,17 @@ def _guard(orig):
 
 socket.socket.connect = _guard(_orig_connect)
 socket.socket.connect_ex = _guard(_orig_connect_ex)
+
+
+# ---- Aislamiento: el contrato de DubVoice (data/contracts/dubvoice.json) es estado GLOBAL; ningun test debe heredar el de otro.
+import shutil  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_contract_file():
+    from app import config
+    shutil.rmtree(config.DATA_DIR / "contracts", ignore_errors=True)
+    yield
+    shutil.rmtree(config.DATA_DIR / "contracts", ignore_errors=True)

@@ -57,6 +57,7 @@ def report(pid: str, si: int, ci: int) -> dict:
         "attempt": {k: att.get(k) for k in ("id", "provider", "model", "status", "paid", "credits", "job_id", "job_id_kind", "original_filename",
                                             "submit_ambiguous", "possible_duplicate", "error_type", "resolved_ambiguity", "adoption_evidence", "raw",
                                             "bad_raw", "local_file")},
+        "timing": vj.attempt_timing(att) if att else None,
         "raw_exists": bool(raw and (store.pdir(pid) / raw).exists()),
         "accounting": {"paid_attempts_f5": vj.paid_attempts(f5), "credits_spent": f5.get("credits_spent"), "round": f5.get("round"),
                        "attempt_ids": [a.get("id") for a in f5.get("attempts", [])]},

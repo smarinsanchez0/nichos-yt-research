@@ -19,14 +19,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import config  # noqa: E402
+from app.phases import video_jobs as vj  # noqa: E402
 
 
 def _t(ts):
     return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "-"
 
 
-def _d(a, b):
-    return f"{b - a:.0f}s" if a and b else "-"
+def _s(v, nd=0):
+    return "-" if v is None else f"{v:.{nd}f}s"
 
 
 def build(pid: str, only: set | None = None, events: int = 25) -> str:
@@ -41,7 +42,7 @@ def build(pid: str, only: set | None = None, events: int = 25) -> str:
                    f"intentos pagados {summ.get('paid_attempts')} · reintentos {summ.get('retries')} · creditos aprox {summ.get('credits_estimated')} · "
                    f"errores {summ.get('errors_by_type')}")
     out.append("")
-    hdr = ("clip", "estado", "int", "prov/modelo", "enviado", "job_id", "sondeos", "t_gen", "recibido", "target", "tramo origen", "resultado", "error", "creditos")
+    hdr = ("clip", "estado", "int", "prov/modelo", "enviado", "job_id", "ack", "sondeos", "t_gen", "recup", "recibido", "target", "tramo origen", "resultado", "error", "creditos")
     rows = [hdr]
     for si, s in enumerate(p.get("scenes", [])):
         for ci, c in enumerate(s.get("clips", [])):
@@ -49,21 +50,24 @@ def build(pid: str, only: set | None = None, events: int = 25) -> str:
                 continue
             f5 = c.get("f5")
             if not f5:
-                rows.append((f"{si + 1}.{ci + 1}", c.get("status", "-"), "-", "-", "-", c.get("task_id") or "-", "-", "-", f"{c.get('duration') or '-'}",
+                rows.append((f"{si + 1}.{ci + 1}", c.get("status", "-"), "-", "-", "-", c.get("task_id") or "-", "-", "-", "-", "-", f"{c.get('duration') or '-'}",
                              f"{c.get('target') or '-'}", "-", "(sin f5: proyecto antiguo)", c.get("error") or "-", "-"))
                 continue
             tl = f"{f5.get('source_start')}→{f5.get('source_end')}" if f5.get("source_start") is not None else "-"
             for a in f5.get("attempts", []) or [{}]:
+                tm = vj.attempt_timing(a)
                 res = a.get("status", "-")
                 if f5["state"] in ("NEEDS_REVIEW", "FAILED") and a.get("id") == f5.get("current_attempt"):
                     res = f"{res}→{f5['state']}:{f5.get('review_reason')}"
                 rows.append((f"{si + 1}.{ci + 1}", f5["state"] + f"/{f5.get('audio_state', '-')}", a.get("id", "-"),
                              f"{a.get('provider', '-')}/{a.get('model') or '-'}", _t(a.get("submitted_at")), a.get("job_id") or "-",
-                             str(a.get("polls", "-")), _d(a.get("submitted_at"), a.get("completed_at")), str(a.get("provider_duration", "-")),
+                             _s(tm["submit_ack_seconds"], 1), str(a.get("polls", "-")), _s(tm["generation_seconds"]), _s(tm["recovery_delay_seconds"]),
+                             str(a.get("provider_duration", "-")),
                              str(f5.get("target_duration")), tl, res, a.get("error_type") or "-", str(a.get("credits") or "-")))
     widths = [max(len(str(r[i])) for r in rows) for i in range(len(hdr))]
     for r in rows:
         out.append("  ".join(str(x).ljust(widths[i]) for i, x in enumerate(r)))
+    out.append("  t_gen = tiempo de generacion observado de principio a fin; '-' si se desconoce (job recuperado: ver recup = envio original → recuperacion, NO es tiempo de generacion)")
     cf = config.DATA_DIR / "contracts" / "dubvoice.json"
     out.append("")
     if cf.exists():
