@@ -1766,6 +1766,7 @@ def summarize(p: dict) -> dict:
     run = p.get("f5_run") or {}
     attempts_total = paid_total = retries = 0
     confirmed_jobs = ambiguous_n = ambiguous_credits = 0
+    by_clip: dict[str, int] = {}                                     # creditos estimados POR clip: el total suma TODO el proyecto, incl. clips de corridas anteriores
     for si, s in enumerate(p.get("scenes", [])):
         for ci, c in enumerate(s.get("clips", [])):
             f5 = c.get("f5") if isinstance(c.get("f5"), dict) else None
@@ -1786,6 +1787,7 @@ def summarize(p: dict) -> dict:
                     paid_total += 1
                     if not a.get("refund_assumed"):
                         credits += a.get("credits") or 0
+                        by_clip[f"{si + 1}.{ci + 1}"] = by_clip.get(f"{si + 1}.{ci + 1}", 0) + (a.get("credits") or 0)
                 if a.get("status") == "VALIDATED":
                     d["accepted"] += 1
                 if a.get("error_type"):
@@ -1832,7 +1834,7 @@ def summarize(p: dict) -> dict:
             "max_recovery_delay_seconds": round(max(recov_times), 1) if recov_times else None,
             "avg_generation_seconds": round(sum(gen_times) / len(gen_times), 1) if gen_times else None,
             "max_generation_seconds": round(max(gen_times), 1) if gen_times else None,
-            "credits_estimated": credits, "possible_duplicates": dup, "needs_review_list": review, "audio_needs_fix": audio_fix,
+            "credits_estimated": credits, "credits_by_clip": by_clip, "possible_duplicates": dup, "needs_review_list": review, "audio_needs_fix": audio_fix,
             "contract": {"dubvoice_verified": contract_verified("dubvoice")}, "clips": clips}
 
 
@@ -1966,7 +1968,7 @@ def finalize(pid: str, run: Run, cancelled: bool = False) -> dict:
     else:
         rv = "; ".join(f"escena {x['scene']} clip {x['clip']} [{x['reason']}]" for x in summ["needs_review_list"])
         run.log(f"🏁 Terminado: {ok}/{tot} clips aceptados · estado F5: {state}" + (f" · requieren revision: {rv}" if rv else "")
-                + f" (≈{summ['credits_estimated']:,} creditos)")
+                + f" (≈{summ['credits_estimated']:,} creditos en TODO el proyecto, acumulados de todas las corridas; por clip: {summ['credits_by_clip']})")
         if summ["audio_needs_fix"]:
             run.log(f"🎙️ {len(summ['audio_needs_fix'])} clip(s) aceptados visualmente con audio por revisar (retry_voice): no se regeneraron.")
     return {**summ, "state": state}

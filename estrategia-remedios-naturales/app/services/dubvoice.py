@@ -350,6 +350,15 @@ class ContractRecorder:
             rec["headers"] = {k: v for k, v in hdrs.items()
                               if k.lower() in _KEEP_HEADERS or k.lower().startswith(("x-ratelimit", "ratelimit", "x-rate"))}
             rec["content_length"] = len(getattr(resp, "content", b"") or b"")
+            if hasattr(resp, "raw"):                                  # WireResponse: evidencia de la capa de transporte
+                rec["content_encoding"] = getattr(resp, "content_encoding", None)
+                rec["request_accept_encoding"] = getattr(resp, "request_accept_encoding", None)
+                rec["raw_length"] = len(resp.raw)
+                if resp.decode_note:
+                    rec["body_decode_note"] = resp.decode_note
+                if resp.decode_error:
+                    rec["body_decode_error"] = resp.decode_error
+                    rec["raw_head_hex"] = resp.raw[:16].hex()
             try:
                 j = resp.json()
                 rec["json_shape"] = errors.shape(j)
@@ -466,6 +475,9 @@ def _veo_strict(body: dict, progress, cancel, on_submit, on_poll, limits, gate, 
         if r.status_code in (502, 504):          # el proxy pudo cortar DESPUES de crear el job
             err.ambiguous = True
         raise err
+    if getattr(r, "decode_error", None):
+        raise F5Error(ErrorType.INVALID_RESPONSE, f"DubVoice (video): respuesta 2xx con cuerpo no decodificable ({r.decode_error})", provider="dubvoice",
+                      ambiguous=True, sub="undecodable_body")
     try:
         j = r.json()
     except Exception:  # noqa: BLE001

@@ -39,12 +39,61 @@ def _retry_after(r) -> float | None:
         return None
 
 
+class WireResponse:
+    """Respuesta HTTP ya leida: bytes CRUDOS del cable + cuerpo decodificado de forma TOLERANTE. Nunca se reconstruye un httpx.Response
+    (eso volvia a descomprimir los bytes ya decodificados y fallaba con `DecodingError: incorrect header check`)."""
+
+    def __init__(self, status_code, headers, raw: bytes, request=None, accept_encoding: str | None = None):
+        self.status_code = status_code
+        self.headers = headers
+        self.raw = raw
+        self.request = request
+        self.request_accept_encoding = accept_encoding
+        self.content_encoding = (headers.get("content-encoding") or "").strip().lower() or None
+        self.content, self.decode_note, self.decode_error = decode_body(raw, self.content_encoding)
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", "replace")
+
+    def json(self):
+        import json
+        return json.loads(self.content.decode("utf-8-sig"))
+
+
+def _looks_plain(b: bytes) -> bool:
+    h = b.lstrip()[:1]
+    return h in (b"{", b"[", b'"') or h.isdigit() or b.lstrip()[:4] in (b"null", b"true") or b.lstrip()[:5] == b"false"
+
+
+def decode_body(raw: bytes, enc: str | None):
+    """-> (cuerpo, nota, error). Si Content-Encoding miente (cuerpo plano) o la descompresion falla, se recupera lo posible sin lanzar."""
+    import zlib
+    if not enc or enc == "identity" or not raw:
+        return raw, None, None
+    tries = []
+    if "gzip" in enc:
+        tries = [lambda: zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw)]
+    elif "deflate" in enc:
+        tries = [lambda: zlib.decompressobj(zlib.MAX_WBITS).decompress(raw), lambda: zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw)]
+    for t in tries:
+        try:
+            return t(), None, None
+        except zlib.error:
+            continue
+    if _looks_plain(raw):
+        return raw, f"content-encoding {enc} anunciado pero el cuerpo era texto plano", None
+    return raw, None, f"cuerpo no decodificable con content-encoding {enc}"
+
+
 def request_once(method: str, url: str, *, connect: float = 10, read: float = 30, deadline: float = 60, cancel=None,
-                 max_bytes: int = 20_000_000, **kw) -> httpx.Response:
+                 max_bytes: int = 20_000_000, **kw) -> WireResponse:
     """UNA peticion con timeouts por fase y deadline total; nunca reintenta (F5 decide). Comprueba `cancel` entre trozos.
 
     Los fallos se tipan como F5Error(CONNECTION_ERROR). `ambiguous=True` si la peticion ya se habia enviado completa
     (la respuesta se perdio): para un POST de creacion eso significa "no sabemos si el proveedor creo el job".
+    Lee bytes CRUDOS (iter_raw) y decodifica por su cuenta: un Content-Encoding defectuoso nunca convierte una respuesta recibida en un error de conexion.
+    Pide `Accept-Encoding: identity` (el servidor puede ignorarlo; el cliente sigue siendo seguro).
     """
     from .errors import Cancelled, ErrorType, F5Error
     t0 = time.time()
@@ -52,11 +101,15 @@ def request_once(method: str, url: str, *, connect: float = 10, read: float = 30
         raise Cancelled("Cancelado")
     remaining = max(deadline, 1.0)
     timeout = httpx.Timeout(connect=min(connect, remaining), read=min(read, remaining), write=min(max(read, 30), remaining), pool=connect)
+    hdrs = dict(kw.pop("headers", None) or {})
+    if not any(k.lower() == "accept-encoding" for k in hdrs):
+        hdrs["Accept-Encoding"] = "identity"
+    ae = next(v for k, v in hdrs.items() if k.lower() == "accept-encoding")
     try:
         with httpx.Client(timeout=timeout, follow_redirects=bool(kw.pop("follow_redirects", False))) as client:
-            with client.stream(method, url, **kw) as resp:
+            with client.stream(method, url, headers=hdrs, **kw) as resp:
                 chunks, size = [], 0
-                for chunk in resp.iter_bytes():
+                for chunk in resp.iter_raw():
                     chunks.append(chunk)
                     size += len(chunk)
                     if size > max_bytes:
@@ -66,7 +119,7 @@ def request_once(method: str, url: str, *, connect: float = 10, read: float = 30
                                       ambiguous=True, sub="deadline")
                     if cancel is not None and cancel.is_set():
                         raise Cancelled("Cancelado")
-                return httpx.Response(resp.status_code, headers=resp.headers, content=b"".join(chunks), request=resp.request)
+                return WireResponse(resp.status_code, resp.headers, b"".join(chunks), request=resp.request, accept_encoding=ae)
     except (F5Error, Cancelled):
         raise
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.WriteError, httpx.WriteTimeout) as e:
@@ -102,7 +155,7 @@ def download(url: str, *, headers: dict | None = None, deadline: float = 180, co
     t0 = time.time()
     try:
         with httpx.Client(timeout=httpx.Timeout(connect=connect, read=read, write=read, pool=connect), follow_redirects=True) as c:
-            with c.stream("GET", url, headers=headers or {}) as resp:
+            with c.stream("GET", url, headers={"Accept-Encoding": "identity", **(headers or {})}) as resp:
                 if resp.status_code != 200:
                     raise F5Error(ErrorType.DOWNLOAD_ERROR, f"Descarga respondio {resp.status_code}", http_status=resp.status_code)
                 want = int(resp.headers.get("content-length") or 0)
