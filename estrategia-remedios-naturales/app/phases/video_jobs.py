@@ -1096,9 +1096,31 @@ class ClipDriver:
                 self._review("UNKNOWN_REMOTE_STATE", "REMOTE", "No hay job_id registrado para este intento: no se sabe si el proveedor creo un job. "
                              "NO se reenvia automaticamente.", possible_duplicate=True, remote_unknown=True)
                 return
+        if att.get("local_file"):                                  # MP4 local adoptado: sin proveedor, sin red, sin slot de generacion
+            self._adopt_local_attempt(att)
+            return
         plan = Plan(att["provider"], att.get("model"), att.get("prompt") or "", att.get("asked_seconds"), 0, False, "reconcile")
         self.run.log(f"🔎 Reconciliando {self.label}: job {att['job_id'][:12]}… en {att['provider']} (sin crear otro)")
         self._acquired_run(plan, resume_job=att)
+
+    def _adopt_local_attempt(self, att: dict) -> None:
+        """Procesa el MP4 local adoptado por el MISMO camino que un video descargado: _raw_saved (MP4 valido + huella visual + RAW guardado
+        de forma atomica) y despues _post_and_apply (QC visual, voz, auditoria). Nunca llama a un proveedor."""
+        path = store.pdir(self.pid) / att["local_file"]
+        if not path.is_file():
+            raise _Stop("ADOPTION_REJECTED", "REMOTE", "El archivo local adoptado ya no existe en adopt_inbox.")
+        self.run.log(f"📥 {self.label}: adopto el MP4 local {att.get('original_filename', '')[:60]} (sin POST, sin proveedor)")
+        data = run_bounded(lambda: path.read_bytes(), 60, self.cancel, "lectura-local")
+        try:
+            self._raw_saved(att["id"], att["job_id"], data)
+        except F5Error as e:
+            if e.sub == "corrupt":
+                with clip_edit(self.pid, self.si, self.ci) as (_, _, f5w):
+                    f5w["free_recovery_done"] = True
+                patch_attempt(self.pid, self.si, self.ci, att["id"], status="ADOPTION_REJECTED")
+                raise _Stop("ADOPTION_REJECTED", "REMOTE", "El MP4 local no es un video valido.")
+            raise
+        self._post_and_apply()
 
     def _acquired_run(self, plan: Plan, resume_job: dict | None) -> None:
         from . import videos
@@ -1335,7 +1357,10 @@ class ClipDriver:
         # 3) voz unificada — el RAW ya esta a salvo; cualquier fallo aqui solo deja el audio original de Veo
         final, warn = raw, None
         try:
-            final, warn = run_bounded(lambda: videos.finish_clip(self.pid, self.si, self.ci, raw), cfg.post_timeout, self.cancel, "voz")
+            if att.get("voice_deferred"):                                   # adopcion con --no-voice: el cambio de voz se hace despues con retry_voice
+                final, warn = raw, "Voz sin unificar (adopcion con --no-voice): repita el cambio de voz con retry_voice; el RAW esta guardado."
+            else:
+                final, warn = run_bounded(lambda: videos.finish_clip(self.pid, self.si, self.ci, raw), cfg.post_timeout, self.cancel, "voz")
         except Cancelled:
             raise
         except Exception as e:  # noqa: BLE001
@@ -1900,42 +1925,96 @@ def stop_project(pid: str) -> None:
 
 
 # ===================================================================== recuperacion MANUAL de un video remoto ya creado (sin pagar)
-def adopt_remote(pid: str, si: int, ci: int, *, result_url: str | None = None, job_id: str | None = None, prog=None, log=None) -> dict:
-    """El usuario encontro el video en el historial del proveedor (envio ambiguo: la respuesta del POST se perdio) y aporta su URL de
-    resultado y/o su task id. NO hay POST: se descarga esa URL (o se consulta ese job) y se exige evidencia de que es el video de ESTE clip:
-      * el clip esta en NEEDS_REVIEW por un envio dudoso, con un intento sin RAW (no hay nada ya asociado);
-      * el handle (URL sin query / id) no pertenece a ningun otro intento del proyecto;
-      * el MP4 es valido, dura lo esperado del modelo (Veo: 8 s ± 1) y su primer fotograma se parece al start frame de ESTA escena mas que
-        al de cualquier otra (huella visual) — si no, NO se asocia y el archivo queda aparte.
-    Despues sigue el flujo normal (QC de Claude, voz, auditoria) y puede terminar ACCEPTED. La hora NUNCA basta por si sola."""
-    import hashlib
-    if not result_url and not job_id:
-        raise ValueError("Indica result_url (enlace del video en el historial del proveedor) y/o job_id.")
-    import re
-    if result_url and not (str(result_url).lower().startswith("https://") or re.match(r"http://(127\.0\.0\.1|localhost)[:/]", str(result_url).lower())):
-        raise ValueError("result_url debe ser https:// (solo se admite http:// en loopback, para pruebas)")
+def _adopt_common(pid: str, si: int, ci: int, *, new_id: str, handles: set, fields: dict, by: str, note: str) -> None:
+    """Nucleo UNICO de toda adopcion (URL remota o MP4 local): valida precondiciones y unicidad, y RESUELVE el intento ambiguo existente
+    (sin crear intento ni pago nuevos: paid_attempts y creditos no cambian). Despues el flujo normal exige RAW valido, huella visual, QC y audio."""
     if not SCHED.claim((pid, si, ci)):
         raise RuntimeError("Ese clip se esta procesando ahora mismo.")
     SCHED.unclaim((pid, si, ci))
-    handle = str(result_url or job_id).split("?")[0]
+    handles = {str(h).split("?")[0] for h in handles if h}
     p = store.get(pid)
     for s2i, s2 in enumerate(p["scenes"]):
         for c2i, c2 in enumerate(s2.get("clips", [])):
-            for a in (c2.get("f5") or {}).get("attempts", []):
-                same_att = (s2i, c2i) == (si, ci) and (c2.get("f5") or {}).get("current_attempt") == a.get("id")
-                for k in ("job_id", "result_url"):
-                    if not same_att and a.get(k) and str(a[k]).split("?")[0] in {handle, str(job_id or "")} and a[k]:
+            f2 = c2.get("f5") or {}
+            for a in f2.get("attempts", []):
+                if (s2i, c2i) == (si, ci) and f2.get("current_attempt") == a.get("id"):
+                    continue
+                for k in ("job_id", "result_url", "local_sha256"):
+                    if a.get(k) and str(a[k]).split("?")[0] in handles:
                         raise ValueError(f"Ese video ya esta asociado a la escena {s2i + 1} clip {c2i + 1}: no se reutiliza.")
     with clip_edit(pid, si, ci) as (_, clip, f5):
         att = attempt_of(f5)
         if f5["state"] != NEEDS_REVIEW or f5.get("review_kind") != "REMOTE" or not att or att.get("raw"):
             raise ValueError("Solo se puede recuperar un clip en NEEDS_REVIEW por un envio/job remoto dudoso y sin RAW asociado.")
-        new_id = str(job_id or "adopted-" + hashlib.sha1(handle.encode()).hexdigest()[:12])
-        att.update(job_id=new_id, result_url=result_url, status="SUBMITTED", submitted_at=att.get("created_at") or now(), paid=True, adopted=True,
-                   adopted_at=now(), needs_fingerprint=True, possible_duplicate=True, error_type=None, error_message=None)
+        resolved = {"from_status": att.get("status"), "by": by, "at": now(), "had_job_id": bool(att.get("job_id"))}
+        att.update(job_id=new_id, status="SUBMITTED", submitted_at=att.get("created_at") or now(), paid=True, adopted=True, adopted_at=now(),
+                   needs_fingerprint=True, possible_duplicate=True, resolved_ambiguity=resolved, **fields)     # error_type/error_message se CONSERVAN (historial)
         f5.update(needs_reconcile=False, remote_unknown=False, free_recovery_done=False, review_reason=None, review_kind=None, review_message=None)
-        f5["history"].append({"t": round(now(), 1), "from": NEEDS_REVIEW, "to": SUBMITTED, "note": "adopt_remote (manual)"})
+        f5["history"].append({"t": round(now(), 1), "from": NEEDS_REVIEW, "to": SUBMITTED, "note": note})
         f5["state"], f5["state_since"] = SUBMITTED, now()
         mirror(clip, f5)
-    event(pid, "adopt_remote", scene=si, clip=ci, handle=handle[:160], by="manual")
+    event(pid, "adopt", scene=si, clip=ci, by=by, handle=sorted(handles)[0][:160] if handles else None)
+
+
+def adopt_remote(pid: str, si: int, ci: int, *, result_url: str | None = None, job_id: str | None = None, prog=None, log=None) -> dict:
+    """El usuario encontro el video en el historial del proveedor (envio ambiguo) y aporta su URL de resultado y/o su task id. NO hay POST:
+    se descarga esa URL (o se consulta ese job) con la misma exigencia de evidencia que toda adopcion (ver _adopt_common y _verify_fingerprint)."""
+    import hashlib
+    import re
+    if not result_url and not job_id:
+        raise ValueError("Indica result_url (enlace del video en el historial del proveedor) y/o job_id.")
+    if result_url and not (str(result_url).lower().startswith("https://") or re.match(r"http://(127\.0\.0\.1|localhost)[:/]", str(result_url).lower())):
+        raise ValueError("result_url debe ser https:// (solo se admite http:// en loopback, para pruebas)")
+    handle = str(result_url or job_id).split("?")[0]
+    new_id = str(job_id or "adopted-" + hashlib.sha1(handle.encode()).hexdigest()[:12])
+    _adopt_common(pid, si, ci, new_id=new_id, handles={handle, str(job_id or "")}, fields={"result_url": result_url}, by="remote_url", note="adopt_remote (manual)")
+    return run_project(pid, [(si, ci)], prog=prog, log=log, explicit=False)
+
+
+MAX_LOCAL_MP4_BYTES = 300_000_000
+
+
+def adopt_local(pid: str, si: int, ci: int, *, file, skip_voice: bool = False, prog=None, log=None) -> dict:
+    """Adopta un MP4 LOCAL ya descargado para RESOLVER un envio ambiguo, sin ningun POST ni llamada a proveedores de video.
+
+    SEGURIDAD: es una funcion/CLI local (tools/f5_adopt_local.py); NO existe endpoint HTTP que reciba rutas (un endpoint asi permitiria leer
+    archivos arbitrarios). El archivo se COPIA a data/projects/<id>/adopt_inbox/ y solo esa copia se procesa.
+    Validaciones previas (sin tocar el estado si fallan): existe, es un archivo regular .mp4 de tamano razonable y un MP4 de video valido.
+    Despues, exactamente las mismas que toda adopcion: handle (sha256) unico en el proyecto, intento ambiguo sin RAW, duracion esperada
+    del modelo, huella visual contra el start frame de ESTA escena (y contra las demas), RAW preservado, QC visual y audio normales.
+    El nombre del archivo es solo metadata (`original_filename`): su UUID NO se interpreta como job_id."""
+    import hashlib
+    import shutil
+    from pathlib import Path as _P
+    src = _P(str(file)).expanduser()
+    if not src.exists():
+        raise ValueError(f"El archivo no existe: {src.name}")
+    if not src.is_file():
+        raise ValueError("La ruta no es un archivo regular.")
+    if src.suffix.lower() != ".mp4":
+        raise ValueError("Solo se adoptan archivos .mp4.")
+    size = src.stat().st_size
+    if size < 1024 or size > MAX_LOCAL_MP4_BYTES:
+        raise ValueError(f"Tamano de archivo no razonable ({size} bytes).")
+    try:
+        info = media.probe(src)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"No se pudo leer el archivo como video ({type(e).__name__}).")
+    if not info.get("has_video") or info.get("duration", 0) < 0.5:
+        raise ValueError("El archivo no es un MP4 de video valido.")
+    h = hashlib.sha256()
+    with open(src, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    sha = h.hexdigest()
+    inbox = (store.pdir(pid) / "adopt_inbox").resolve()
+    dest = store.path(pid, "adopt_inbox", f"s{si:02d}_c{ci}_{sha[:12]}.mp4")
+    if src.resolve() != dest.resolve():
+        if not dest.exists():
+            shutil.copyfile(src, dest)
+    rel = store.rel(pid, dest)
+    assert dest.resolve().parent == inbox
+    new_id = f"local-{sha[:16]}"
+    fields = {"local_file": rel, "original_filename": src.name[:200], "local_sha256": sha, "job_id_kind": "local_file", "voice_deferred": bool(skip_voice)}
+    _adopt_common(pid, si, ci, new_id=new_id, handles={new_id, "sha256:" + sha, sha}, fields=fields, by="local_file", note="adopt_local (manual)")
     return run_project(pid, [(si, ci)], prog=prog, log=log, explicit=False)

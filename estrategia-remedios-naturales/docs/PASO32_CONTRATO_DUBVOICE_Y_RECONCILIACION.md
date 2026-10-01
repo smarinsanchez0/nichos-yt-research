@@ -71,3 +71,12 @@ Si el POST devuelve directamente la URL, F5 persiste un id sintético `sync-…`
 
 ## 8. Qué falta para marcar `dubvoice_verified=true`
 Una respuesta real del POST (forma del JSON y campo de id/URL), el endpoint y parámetro de sondeo (si existe), los valores de estado reales, el campo de URL final, y —para reconciliar automáticamente— un endpoint de listado/búsqueda o una clave de idempotencia. Hoy: `verified=false`.
+
+## 9. PASO 3.2.1 — adopción de un MP4 local ya descargado
+Arquitectura **A** (local, sin HTTP): `video_jobs.adopt_local()` + `tools/f5_adopt_local.py`. **No existe endpoint que reciba rutas** (el único `/adopt` HTTP sigue siendo el de URL remota `https://`; rechaza `file://`, rutas y `http://` no loopback).
+* Validación previa, sin tocar el estado: archivo existente, regular, `.mp4`, 1 KB–300 MB, MP4 de video válido (ffprobe).
+* Se COPIA a `data/projects/<id>/adopt_inbox/` y se calcula su sha256 (handle único en el proyecto).
+* Reutiliza el núcleo de `adopt_remote` (`_adopt_common`) y el mismo pipeline: `_raw_saved` (RAW atómico) → huella visual (duración del modelo + start frame de esta escena vs. las demás, empates fallan) → QC visual → voz → auditoría. Nada se acepta "por dar una ruta".
+* **Resuelve el intento ambiguo existente** (p. ej. `a2`): no crea intento ni pago (`paid_attempts` y créditos no cambian); conserva `submit_ambiguous`, `possible_duplicate`, `error_type` y añade `resolved_ambiguity {from_status: AMBIGUOUS, by: local_file}`.
+* El UUID del nombre del archivo es solo `original_filename`; el `job_id` es `local-<sha256[:16]>` (`job_id_kind=local_file`).
+* `--no-voice` omite el cambio de voz (se repite luego con `retry_voice`; `audio_state=NEEDS_FIX`).
