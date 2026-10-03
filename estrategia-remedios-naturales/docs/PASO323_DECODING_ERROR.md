@@ -3,8 +3,10 @@
 **Causa raiz (reproducida en local, 0 red real):** `http.request_once` leia el cuerpo con `iter_bytes()` (httpx YA lo descomprime segun `Content-Encoding`)
 y despues lo envolvia en `httpx.Response(..., headers=resp.headers, content=<bytes decodificados>)`. Ese constructor llama a `read()` y vuelve a
 descomprimir esos bytes porque la cabecera `Content-Encoding` se conservaba -> `DecodingError: Error -3 ... incorrect header check`. Fallaba incluso con un
-gzip/deflate VALIDO; `except httpx.HTTPError` lo convertia en `CONNECTION_ERROR ambiguous after_send`. El error es nuestro, no del servidor: la respuesta
-de 106 s probablemente fue valida y el job se creo (inferencia: no se capturaron status/headers/cuerpo reales; `dubvoice_verified` sigue en false).
+gzip/deflate VALIDO; `except httpx.HTTPError` lo convertia en `CONNECTION_ERROR ambiguous after_send`. El error es nuestro, no del servidor: el bug
+ocultó la respuesta real de los 106 s. CORRECCION (2026-10-03): se infirio que el job probablemente se creo, pero el usuario confirmo en el panel que
+DubVoice NO genero video. Por tanto la respuesta pudo ser un error (4xx/5xx/politica de contenido) o un 2xx sin job; sigue SIN conocerse (status/headers/cuerpo
+no se capturaron). `dubvoice_verified` sigue en false.
 
 **Arreglo:** `request_once` lee bytes CRUDOS (`iter_raw()`), decodifica por su cuenta (`decode_body`: gzip, deflate zlib/raw; si el cuerpo es JSON plano con
 un Content-Encoding falso se recupera y se anota) y devuelve un `WireResponse` (status, cabeceras originales, `raw`, `content_encoding`, `decode_note`,
